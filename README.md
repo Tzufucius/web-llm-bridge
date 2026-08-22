@@ -141,6 +141,10 @@ With `--json`, stdout is one machine-readable JSON object and progress or diagno
 
 The bridge avoids automatically resending prompts when submission state is uncertain. See [protocol.md](docs/protocol.md) for error and retry semantics.
 
+## Agent Skill
+
+Web LLM Bridge ships a repository-maintained Agent Skill that teaches compatible local agents when and how to consult a Web LLM through the bridge. See [skills/web-llm-bridge/SKILL.md](skills/web-llm-bridge/SKILL.md).
+
 ## Supported Providers
 
 - [x] ChatGPT Web — Alpha
