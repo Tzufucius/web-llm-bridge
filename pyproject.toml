@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web-llm-bridge"
+version = "0.1.0"
+description = "A local browser bridge for supported LLM web applications"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "web-llm-bridge contributors" }]
+dependencies = [
+    "websockets>=14",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.scripts]
+web-llm-bridge = "web_llm_bridge.cli.interactive:main"
+web-llm-agent = "web_llm_bridge.cli.agent:main"
+web-llm-broker = "web_llm_bridge.broker.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["web_llm_bridge*"]
