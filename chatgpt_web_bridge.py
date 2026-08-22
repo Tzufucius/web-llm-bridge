@@ -50,6 +50,7 @@ PROGRESS_PHASES: Final[set[str]] = {
     "submitted",
     "thinking",
     "working",
+    "tool_call",
     "streaming",
 }
 ALLOWED_HOSTS: Final[set[str]] = {"chatgpt.com", "www.chatgpt.com"}
@@ -706,6 +707,7 @@ class _CliProgressRenderer:
         "submitted": "ChatGPT 已提交，正在思考",
         "thinking": "ChatGPT 正在思考",
         "working": "ChatGPT 正在工作",
+        "tool_call": "ChatGPT 正在调用工具",
         "streaming": "ChatGPT 正在生成回复",
     }
 

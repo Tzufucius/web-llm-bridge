@@ -297,7 +297,13 @@ async function handleRequest(request) {
   }
 }
 
-const PROGRESS_PHASES = new Set(["submitted", "thinking", "working", "streaming"]);
+const PROGRESS_PHASES = new Set([
+  "submitted",
+  "thinking",
+  "working",
+  "tool_call",
+  "streaming",
+]);
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type !== "chat_progress") {
