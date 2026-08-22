@@ -81,7 +81,7 @@ class FakeNode {
   querySelector() { return null; }
 }
 
-async function runSmoke() {
+async function runSmoke({ complete = true } = {}) {
   const users = [];
   const assistants = [];
   let toolNode = null;
@@ -118,9 +118,11 @@ async function runSmoke() {
         if (toolNode) {
           toolNode.innerText = `工具调用 ${index}`;
           toolNode.textContent = toolNode.innerText;
+          toolNode.attrs["data-status"] = `running-${index}`;
         }
       }, 40 * index);
     }
+    if (!complete) return;
     setTimeout(() => {
       generating = false;
       assistants.push(new FakeNode("assistant", { "data-message-author-role": "assistant" }, "最终回复"));
@@ -174,13 +176,20 @@ async function runSmoke() {
   const response = await new Promise((resolve) => {
     listeners[0]({ method: "chat", text: "审查", request_id: "req-tool" }, {}, resolve);
   });
+  if (!complete) {
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "RESPONSE_TIMEOUT");
+    return;
+  }
   assert.equal(response.ok, true);
   assert.equal(response.result.text, "最终回复");
   assert.ok(progress.some((message) => message.phase === "tool_call"));
   assert.ok(progress.every((message) => message.request_id === "req-tool"));
 }
 
-runSmoke().catch((error) => {
+runSmoke()
+  .then(() => runSmoke({ complete: false }))
+  .catch((error) => {
   console.error(error);
   process.exitCode = 1;
-});
+  });
