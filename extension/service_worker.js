@@ -171,6 +171,17 @@ function isChatGPTUrl(value) {
   }
 }
 
+function normalizeConversationUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (!isChatGPTUrl(value)) return null;
+    const pathname = parsed.pathname || "/";
+    return `${parsed.origin}${pathname === "/" ? "/" : pathname.replace(/\/+$/, "")}`;
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function getTab(tabId) {
   if (!Number.isInteger(tabId)) {
     throw bridgeError("TAB_CLOSED", "绑定的 ChatGPT 标签页不存在", true);
@@ -222,13 +233,43 @@ async function sendToContent(tabId, message) {
   }
 }
 
-async function openChatGPT(params) {
+async function attachOrOpenChatGPT(params) {
   const url = params?.url;
   if (typeof url !== "string" || !isChatGPTUrl(url)) {
     throw bridgeError(
       "INVALID_URL",
       "仅支持 https://chatgpt.com 或 https://www.chatgpt.com",
     );
+  }
+
+  const targetUrl = normalizeConversationUrl(url);
+  const requestedTabId = params?.tab_id;
+  if (params?.new !== true && Number.isInteger(requestedTabId)) {
+    try {
+      const savedTab = await chrome.tabs.get(requestedTabId);
+      if (isChatGPTUrl(savedTab.url || "") && normalizeConversationUrl(savedTab.url) === targetUrl) {
+        await waitForContentScript(savedTab.id);
+        const currentTab = await getTab(savedTab.id);
+        return { tab_id: savedTab.id, url: currentTab.url || url };
+      }
+    } catch (_error) {
+      // The saved tab may have been closed. Search the browser before creating.
+    }
+  }
+
+  if (params?.new !== true && typeof chrome.tabs?.query === "function") {
+    const tabs = await chrome.tabs.query({});
+    const matchingTab = tabs.find(
+      (tab) =>
+        Number.isInteger(tab.id) &&
+        isChatGPTUrl(tab.url || "") &&
+        normalizeConversationUrl(tab.url) === targetUrl,
+    );
+    if (matchingTab?.id !== undefined) {
+      await waitForContentScript(matchingTab.id);
+      const currentTab = await getTab(matchingTab.id);
+      return { tab_id: matchingTab.id, url: currentTab.url || url };
+    }
   }
 
   const tab = await chrome.tabs.create({ url, active: true });
@@ -240,18 +281,37 @@ async function openChatGPT(params) {
   return { tab_id: tab.id, url: currentTab.url || url };
 }
 
+async function openChatGPT(params) {
+  return attachOrOpenChatGPT(params);
+}
+
 async function tabRequest(method, params) {
   const tabId = params?.tab_id;
   await waitForContentScript(tabId);
-  const result = await sendToContent(tabId, {
-    method,
-    text: params?.text,
-    limit: params?.limit,
-    full: params?.full === true,
-    request_id: params?.request_id,
-  });
-  const currentTab = await getTab(tabId);
-  return { ...result, url: currentTab.url || "" };
+  const chatDispatchStarted = method === "chat";
+  try {
+    const result = await sendToContent(tabId, {
+      method,
+      text: params?.text,
+      limit: params?.limit,
+      full: params?.full === true,
+      request_id: params?.request_id,
+    });
+    const currentTab = await getTab(tabId);
+    return { ...result, url: currentTab.url || "" };
+  } catch (error) {
+    if (
+      chatDispatchStarted &&
+      ["TAB_CLOSED", "CONTENT_SCRIPT_UNAVAILABLE", "EXTENSION_NOT_CONNECTED"].includes(error?.code)
+    ) {
+      throw bridgeError(
+        "CHAT_STATE_UNKNOWN",
+        "消息可能已经提交，但当前无法确认 ChatGPT 的最终执行状态",
+        false,
+      );
+    }
+    throw error;
+  }
 }
 
 async function routeRequest(method, params, requestId) {
@@ -323,6 +383,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       type: "progress",
       id: message.request_id,
       tab_id: tabId,
+      url: sender.url || "",
       phase: message.phase,
       elapsed_ms: Number.isFinite(message.elapsed_ms)
         ? Math.max(0, message.elapsed_ms)

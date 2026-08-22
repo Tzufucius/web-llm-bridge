@@ -29,6 +29,11 @@ except ImportError:  # websockets 旧版本兼容
 
 from websockets.exceptions import ConnectionClosed
 
+try:
+    from .session_store import SessionStore
+except ImportError:  # direct script execution
+    from session_store import SessionStore  # type: ignore
+
 
 # =========================
 # Configuration
@@ -80,6 +85,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "SEND_FAILED": "ChatGPT 页面在 60 秒内未确认消息提交，可能仍在加载或页面结构已变化",
     "SEND_BUTTON_NOT_FOUND": "未找到可靠的 ChatGPT 发送按钮",
     "BUSY": "ChatGPT 当前仍在生成回复",
+    "CHAT_STATE_UNKNOWN": "消息可能已经提交，但当前无法确认 ChatGPT 的最终执行状态",
     "RESPONSE_TIMEOUT": "连续 5 分钟未检测到页面更新，等待 ChatGPT 回复超时",
     "DOM_CHANGED": "ChatGPT 页面结构可能已经发生变化",
     "INTERNAL_ERROR": "ChatGPT Web Bridge 内部错误",
@@ -91,17 +97,31 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
 class ChatGPTBridgeError(RuntimeError):
     """ChatGPT Web Bridge 操作失败。"""
 
-    def __init__(self, message: str, code: str = "INTERNAL_ERROR") -> None:
+    def __init__(
+        self,
+        message: str,
+        code: str = "INTERNAL_ERROR",
+        *,
+        safe_to_retry: bool = False,
+    ) -> None:
         self.code = code
+        self.safe_to_retry = safe_to_retry
         super().__init__(message)
 
 
 class _BridgeRPCError(RuntimeError):
     """Extension 返回的内部 RPC 错误。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        safe_to_retry: bool = False,
+    ) -> None:
         self.code = code
         self.message = message
+        self.safe_to_retry = safe_to_retry
         super().__init__(message)
 
 
@@ -251,7 +271,11 @@ class _BridgeTransport:
                 raise _BridgeRPCError("INTERNAL_ERROR", "Extension 返回了无效错误")
             code = str(error.get("code", "INTERNAL_ERROR"))
             message = str(error.get("message", _error_message(code)))
-            raise _BridgeRPCError(code, message)
+            raise _BridgeRPCError(
+                code,
+                message,
+                safe_to_retry=error.get("safe_to_retry") is True,
+            )
 
         result = response.get("result", {})
         if not isinstance(result, dict):
@@ -367,6 +391,7 @@ class _BridgeTransport:
                         _BridgeRPCError(
                             "EXTENSION_NOT_CONNECTED",
                             _error_message("EXTENSION_NOT_CONNECTED"),
+                            safe_to_retry=False,
                         )
                     )
                     LOGGER.warning("浏览器扩展连接已断开")
@@ -420,7 +445,13 @@ class _BridgeTransport:
     def _fail_pending(self, error: _BridgeRPCError) -> None:
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(_BridgeRPCError(error.code, error.message))
+                future.set_exception(
+                    _BridgeRPCError(
+                        error.code,
+                        error.message,
+                        safe_to_retry=error.safe_to_retry,
+                    )
+                )
         self._pending.clear()
         self._progress_callbacks.clear()
         for progress_event in self._progress_events.values():
@@ -514,6 +545,7 @@ class ChatGPTSession:
             raise ChatGPTBridgeError(
                 _error_message(exc.code, exc.message),
                 exc.code,
+                safe_to_retry=exc.safe_to_retry,
             ) from exc
         except ChatGPTBridgeError:
             await _release_shared_transport(transport)
@@ -577,7 +609,7 @@ class ChatGPTSession:
                     "chat",
                     {"tab_id": self._tab_id, "text": text},
                     timeout_ms=RESPONSE_IDLE_TIMEOUT_MS,
-                    progress_callback=self._progress_callback,
+                    progress_callback=self._handle_progress,
                     reset_timeout_on_progress=True,
                 )
             except ChatGPTBridgeError as exc:
@@ -623,13 +655,25 @@ class ChatGPTSession:
             code = exc.code
             if method == "chat" and code == "RPC_TIMEOUT":
                 code = "RESPONSE_TIMEOUT"
-            raise ChatGPTBridgeError(_error_message(code, exc.message), code) from exc
+            raise ChatGPTBridgeError(
+                _error_message(code, exc.message),
+                code,
+                safe_to_retry=exc.safe_to_retry,
+            ) from exc
 
     def _set_progress_callback(
         self,
         callback: Callable[[dict[str, Any]], None] | None,
     ) -> None:
         self._progress_callback = callback
+
+    def _handle_progress(self, event: dict[str, Any]) -> None:
+        """同步恢复 URL 后再通知 CLI 或 Broker 观察者。"""
+        current_url = event.get("url")
+        if isinstance(current_url, str) and current_url:
+            self._current_url = current_url
+        if self._progress_callback is not None:
+            self._progress_callback(event)
 
     async def _reopen_current_tab(self) -> None:
         self._ensure_open()
@@ -855,9 +899,26 @@ def _print_history(messages: list[dict[str, str]]) -> None:
         print()
 
 
+def _print_sessions(store: SessionStore) -> None:
+    records = store.list()
+    if not records:
+        print("暂无已保存的 Session。")
+        return
+    for record in records:
+        active = " *" if record.get("active") else ""
+        print(
+            f"{record.get('session_id')} {active}\n"
+            f"  URL: {record.get('current_url')}\n"
+            f"  更新时间: {record.get('updated_at')}  sequence: {record.get('sequence', 0)}"
+        )
+
+
 async def main() -> None:
     session: ChatGPTSession | None = None
     progress_renderer: _CliProgressRenderer | None = None
+    session_store = SessionStore()
+    cli_session_id: str | None = None
+    cli_sequence = 0
     try:
         open_existing = await _prompt_start_mode()
         load_history = False
@@ -880,6 +941,14 @@ async def main() -> None:
 
         print("正在启动 localhost Bridge 并等待浏览器扩展...")
         session = await ChatGPTSession.open(url)
+        cli_session_id = uuid4().hex
+        session_store.upsert(
+            session_id=cli_session_id,
+            tab_id=session._tab_id,
+            current_url=session._current_url,
+            sequence=0,
+            active=True,
+        )
         progress_renderer = _CliProgressRenderer()
         session._set_progress_callback(progress_renderer)
         print("ChatGPT 标签页已绑定。")
@@ -921,6 +990,25 @@ async def main() -> None:
                     LOGGER.error("%s", exc)
                     print(f"错误：{exc}")
                 continue
+            if command == "/sessions":
+                _print_sessions(session_store)
+                selected = (await _ainput("输入 Session ID 切换，直接回车保持当前：\n> ")).strip()
+                if selected:
+                    selected_record = session_store.get(selected)
+                    if selected_record is None:
+                        print("错误：Session 不存在。")
+                    else:
+                        try:
+                            session._current_url = selected_record["current_url"]
+                            await session._reopen_current_tab()
+                            cli_session_id = selected
+                            cli_sequence = int(selected_record.get("sequence") or 0)
+                            session_store.mark_active(selected, True)
+                            print(f"已切换到 Session：{selected}")
+                        except ChatGPTBridgeError as exc:
+                            LOGGER.error("%s", exc)
+                            print(f"错误：{exc}")
+                continue
             if not command:
                 continue
 
@@ -940,6 +1028,15 @@ async def main() -> None:
             else:
                 if progress_renderer is not None:
                     progress_renderer.clear()
+                cli_sequence += 1
+                if cli_session_id is not None:
+                    session_store.update(
+                        cli_session_id,
+                        tab_id=session._tab_id,
+                        current_url=session._current_url,
+                        sequence=cli_sequence,
+                        active=True,
+                    )
                 print(f"ChatGPT > {answer}")
     except (ChatGPTBridgeError, EOFError, KeyboardInterrupt) as exc:
         if isinstance(exc, ChatGPTBridgeError):
