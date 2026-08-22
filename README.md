@@ -83,7 +83,7 @@ session = await ChatGPTSession.open(
 )
 ```
 
-启用后，`get_messages()` 遇到 `TAB_CLOSED` 会基于最近记录的 Conversation URL 自动重新打开并只重试读取一次。`chat()` 不会自动重发状态不确定的 prompt；CLI 会先询问是否基于当前 URL 重开，重开后需要用户再次输入消息。ChatGPT 首页跳转到 `/c/...` 时 tabId 保持不变，Bridge 会在 RPC 返回时更新当前 URL。
+启用后，`get_messages()` 遇到 `TAB_CLOSED` 会基于最近记录的 Conversation URL 自动重新打开并只重试读取一次；`chat()` 只恢复绑定并保留原错误，不会自动重发状态不确定的 prompt。CLI 会先询问是否基于当前 URL 重开，重开后需要用户再次输入消息。ChatGPT 首页跳转到 `/c/...` 时 tabId 保持不变，Bridge 会在 RPC 返回时更新当前 URL。
 
 ## CLI 命令
 
