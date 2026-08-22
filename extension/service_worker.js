@@ -14,9 +14,10 @@ let reconnectDelay = RECONNECT_DELAY_MS;
 let handshakeReady = false;
 let reconnectSuppressed = false;
 
-function bridgeError(code, message) {
+function bridgeError(code, message, safeToRetry = false) {
   const error = new Error(message);
   error.code = code;
+  error.safeToRetry = safeToRetry;
   return error;
 }
 
@@ -172,12 +173,12 @@ function isChatGPTUrl(value) {
 
 async function getTab(tabId) {
   if (!Number.isInteger(tabId)) {
-    throw bridgeError("TAB_CLOSED", "绑定的 ChatGPT 标签页不存在");
+    throw bridgeError("TAB_CLOSED", "绑定的 ChatGPT 标签页不存在", true);
   }
   try {
     return await chrome.tabs.get(tabId);
   } catch (_error) {
-    throw bridgeError("TAB_CLOSED", "绑定的 ChatGPT 标签页已关闭");
+    throw bridgeError("TAB_CLOSED", "绑定的 ChatGPT 标签页已关闭", true);
   }
 }
 
@@ -242,7 +243,12 @@ async function openChatGPT(params) {
 async function tabRequest(method, params) {
   const tabId = params?.tab_id;
   await waitForContentScript(tabId);
-  const result = await sendToContent(tabId, { method, text: params?.text });
+  const result = await sendToContent(tabId, {
+    method,
+    text: params?.text,
+    limit: params?.limit,
+    full: params?.full === true,
+  });
   const currentTab = await getTab(tabId);
   return { ...result, url: currentTab.url || "" };
 }
@@ -274,7 +280,11 @@ async function handleRequest(request) {
         type: "response",
         id: requestId,
         ok: false,
-        error: { code, message },
+        error: {
+          code,
+          message,
+          safe_to_retry: error?.safeToRetry === true,
+        },
       });
     } catch (_sendError) {
       // Python 可能已经断开，下一次连接会重新发送 hello。

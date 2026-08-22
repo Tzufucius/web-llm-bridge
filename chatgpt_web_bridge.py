@@ -41,6 +41,8 @@ RPC_TIMEOUT_MS: Final[int] = 30_000
 RESPONSE_TIMEOUT_MS: Final[int] = 180_000
 MAX_WS_MESSAGE_SIZE: Final[int] = 8 * 1024 * 1024
 MIN_WEBSOCKETS_VERSION: Final[tuple[int, int]] = (14, 0)
+DEFAULT_HISTORY_LIMIT: Final[int] = 5
+MAX_HISTORY_LIMIT: Final[int] = 1_000
 ALLOWED_HOSTS: Final[set[str]] = {"chatgpt.com", "www.chatgpt.com"}
 ALLOWED_EXTENSION_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^chrome-extension://[a-p]{32}$"
@@ -385,15 +387,27 @@ async def _release_shared_transport(transport: _BridgeTransport) -> None:
 class ChatGPTSession:
     """绑定浏览器 Extension 创建的单个 ChatGPT tab。"""
 
-    def __init__(self, transport: _BridgeTransport, tab_id: int, current_url: str) -> None:
+    def __init__(
+        self,
+        transport: _BridgeTransport,
+        tab_id: int,
+        current_url: str,
+        reopen_on_closed: bool = False,
+    ) -> None:
         self._transport = transport
         self._tab_id = tab_id
         self._current_url = current_url
+        self._reopen_on_closed = reopen_on_closed
+        self._last_history_truncated = False
         self._chat_lock = asyncio.Lock()
         self._closed = False
 
     @classmethod
-    async def open(cls, url: str) -> "ChatGPTSession":
+    async def open(
+        cls,
+        url: str,
+        reopen_on_closed: bool = False,
+    ) -> "ChatGPTSession":
         normalized_url = cls._validate_url(url)
         transport = await _acquire_shared_transport()
         try:
@@ -412,7 +426,7 @@ class ChatGPTSession:
             if not isinstance(current_url, str):
                 current_url = normalized_url
             LOGGER.info("已绑定 ChatGPT tabId=%s", tab_id)
-            return cls(transport, tab_id, current_url)
+            return cls(transport, tab_id, current_url, reopen_on_closed)
         except _BridgeRPCError as exc:
             await _release_shared_transport(transport)
             raise ChatGPTBridgeError(
@@ -426,9 +440,24 @@ class ChatGPTSession:
             await _release_shared_transport(transport)
             raise
 
-    async def get_messages(self) -> list[dict[str, str]]:
+    async def get_messages(
+        self,
+        limit: int | None = None,
+        full: bool = False,
+    ) -> list[dict[str, str]]:
         self._ensure_open()
-        result = await self._request("get_messages", {"tab_id": self._tab_id})
+        self._validate_history_options(limit, full)
+
+        def request_params() -> dict[str, Any]:
+            return {"tab_id": self._tab_id, "limit": limit, "full": full}
+
+        try:
+            result = await self._request("get_messages", request_params())
+        except ChatGPTBridgeError as exc:
+            if exc.code != "TAB_CLOSED" or not self._reopen_on_closed:
+                raise
+            await self._reopen_current_tab()
+            result = await self._request("get_messages", request_params())
         messages = result.get("messages")
         if not isinstance(messages, list):
             raise ChatGPTBridgeError("Extension 返回了无效消息列表", "INTERNAL_ERROR")
@@ -439,6 +468,12 @@ class ChatGPTSession:
                 or not isinstance(message.get("content"), str)
             ):
                 raise ChatGPTBridgeError("Extension 返回了无效消息", "INTERNAL_ERROR")
+        self._last_history_truncated = result.get("truncated") is True
+        if self._last_history_truncated:
+            LOGGER.warning(
+                "历史消息加载达到时间限制，仅返回已捕获的 %s 条消息",
+                len(messages),
+            )
         self._update_url(result)
         return messages
 
@@ -480,6 +515,38 @@ class ChatGPTSession:
                 code = "RESPONSE_TIMEOUT"
             raise ChatGPTBridgeError(_error_message(code, exc.message), code) from exc
 
+    async def _reopen_current_tab(self) -> None:
+        self._ensure_open()
+        result = await self._request(
+            "open",
+            {"url": self._current_url},
+            timeout_ms=EXTENSION_CONNECT_TIMEOUT_MS,
+        )
+        tab_id = result.get("tab_id")
+        if not isinstance(tab_id, int):
+            raise ChatGPTBridgeError("Extension 未返回有效的 tabId", "INTERNAL_ERROR")
+        self._tab_id = tab_id
+        self._update_url(result)
+        LOGGER.info("已重新绑定 ChatGPT tabId=%s", tab_id)
+
+    @staticmethod
+    def _validate_history_options(limit: int | None, full: bool) -> None:
+        if not isinstance(full, bool):
+            raise ChatGPTBridgeError("full 参数必须是布尔值", "INPUT_FAILED")
+        if full:
+            return
+        if limit is None:
+            return
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= MAX_HISTORY_LIMIT
+        ):
+            raise ChatGPTBridgeError(
+                f"历史消息数量必须是 1 到 {MAX_HISTORY_LIMIT} 的正整数",
+                "INPUT_FAILED",
+            )
+
     def _update_url(self, result: dict[str, Any]) -> None:
         current_url = result.get("url")
         if isinstance(current_url, str) and current_url:
@@ -516,6 +583,110 @@ async def _ainput(prompt: str) -> str:
     return await asyncio.to_thread(input, prompt)
 
 
+def _is_home_url(url: str) -> bool:
+    parsed = urlparse(url.strip())
+    return parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
+
+
+async def _prompt_start_mode() -> bool:
+    while True:
+        choice = (
+            await _ainput(
+                "请选择会话启动方式：\n\n"
+                "[1] 新建 ChatGPT 对话\n"
+                "[2] 打开已有 ChatGPT 对话 URL\n\n"
+                "> "
+            )
+        ).strip().lower()
+        if choice in {"", "1"}:
+            return False
+        if choice == "2":
+            return True
+        print("请输入 1 或 2。")
+
+
+async def _prompt_yes_no(prompt: str) -> bool:
+    while True:
+        answer = (await _ainput(prompt)).strip().lower()
+        if answer in {"", "y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("请输入 y/yes 或 n/no。")
+
+
+async def _prompt_history_options() -> tuple[int | None, bool]:
+    while True:
+        choice = (
+            await _ainput(
+                "加载多少条历史消息？\n\n"
+                "[Enter] 最近 5 条\n"
+                "[n]     自定义条数\n"
+                "[a]     全部历史\n\n"
+                "> "
+            )
+        ).strip().lower()
+        if not choice:
+            return DEFAULT_HISTORY_LIMIT, False
+        if choice in {"a", "all"}:
+            return None, True
+        if choice == "n":
+            while True:
+                custom = (await _ainput("请输入要加载的历史消息数量：\n> ")).strip()
+                if custom.isdigit():
+                    value = int(custom)
+                    if 1 <= value <= MAX_HISTORY_LIMIT:
+                        return value, False
+                print(f"请输入 1 到 {MAX_HISTORY_LIMIT} 的正整数。")
+        elif choice.isdigit():
+            value = int(choice)
+            if 1 <= value <= MAX_HISTORY_LIMIT:
+                return value, False
+            print(f"请输入 1 到 {MAX_HISTORY_LIMIT} 的正整数。")
+        else:
+            print("请输入数字、n 或 a/all。")
+
+
+async def _prompt_reopen(session: ChatGPTSession) -> bool:
+    print("当前绑定的 ChatGPT 标签页已关闭。")
+    print(f"原会话：{session._current_url}")
+    if not await _prompt_yes_no("是否重新打开该会话？ [Y/n]\n> "):
+        return False
+    await session._reopen_current_tab()
+    print(f"会话已重新绑定，当前 URL：{session._current_url}")
+    return True
+
+
+async def _load_history_for_cli(
+    session: ChatGPTSession,
+    limit: int | None = None,
+    full: bool = False,
+) -> list[dict[str, str]]:
+    try:
+        return await session.get_messages(limit=limit, full=full)
+    except ChatGPTBridgeError as exc:
+        if exc.code != "TAB_CLOSED" or not await _prompt_reopen(session):
+            raise
+        return await session.get_messages(limit=limit, full=full)
+
+
+def _parse_history_command(command: str) -> tuple[int | None, bool]:
+    parts = command.split(maxsplit=1)
+    if len(parts) == 1:
+        return None, False
+    value = parts[1].strip().lower()
+    if value in {"all", "a"}:
+        return None, True
+    if value.isdigit():
+        limit = int(value)
+        if 1 <= limit <= MAX_HISTORY_LIMIT:
+            return limit, False
+    raise ChatGPTBridgeError(
+        f"/history 数量必须是 1 到 {MAX_HISTORY_LIMIT} 的正整数，或 all",
+        "INPUT_FAILED",
+    )
+
+
 def _print_history(messages: list[dict[str, str]]) -> None:
     for message in messages:
         print(f"[{message['role']}]")
@@ -526,16 +697,42 @@ def _print_history(messages: list[dict[str, str]]) -> None:
 async def main() -> None:
     session: ChatGPTSession | None = None
     try:
-        url = (await _ainput("请输入 ChatGPT URL：\n> ")).strip()
-        if not url:
-            raise ChatGPTBridgeError("URL 不能为空", "INVALID_URL")
+        open_existing = await _prompt_start_mode()
+        load_history = False
+        history_limit: int | None = None
+        load_all_history = False
+        if open_existing:
+            url = (await _ainput("请输入 ChatGPT Conversation URL：\n> ")).strip()
+            if not url:
+                raise ChatGPTBridgeError("URL 不能为空", "INVALID_URL")
+            if _is_home_url(url):
+                print("该 URL 是 ChatGPT 首页，将按新对话处理。")
+            else:
+                load_history = await _prompt_yes_no(
+                    "是否加载已有对话记录？ [Y/n]\n> "
+                )
+                if load_history:
+                    history_limit, load_all_history = await _prompt_history_options()
+        else:
+            url = "https://chatgpt.com/"
 
         print("正在启动 localhost Bridge 并等待浏览器扩展...")
         session = await ChatGPTSession.open(url)
-        messages = await session.get_messages()
         print("ChatGPT 标签页已绑定。")
         print(f"当前 URL: {session._current_url}")
-        print(f"已读取 {len(messages)} 条消息。")
+        if load_history:
+            if load_all_history:
+                print("正在加载完整历史记录...")
+            else:
+                print(f"正在加载最近 {history_limit} 条历史消息...")
+            messages = await _load_history_for_cli(
+                session,
+                limit=history_limit,
+                full=load_all_history,
+            )
+            print(f"已加载 {len(messages)} 条历史消息。")
+            if session._last_history_truncated:
+                print("历史加载达到时间限制，可能仍有更早记录未加载。")
         print("提示：如需连接或重连扩展，请点击浏览器工具栏中的扩展图标。")
 
         while True:
@@ -547,9 +744,15 @@ async def main() -> None:
 
             if command in {"/exit", "/quit"}:
                 break
-            if command == "/history":
+            if command == "/history" or command.startswith("/history "):
                 try:
-                    _print_history(await session.get_messages())
+                    history_limit, load_all_history = _parse_history_command(command)
+                    messages = await _load_history_for_cli(
+                        session,
+                        limit=history_limit,
+                        full=load_all_history,
+                    )
+                    _print_history(messages)
                 except ChatGPTBridgeError as exc:
                     LOGGER.error("%s", exc)
                     print(f"错误：{exc}")
@@ -563,6 +766,12 @@ async def main() -> None:
             except ChatGPTBridgeError as exc:
                 LOGGER.error("%s", exc)
                 print(f"错误：{exc}")
+                if exc.code == "TAB_CLOSED":
+                    try:
+                        await _prompt_reopen(session)
+                    except ChatGPTBridgeError as reopen_error:
+                        LOGGER.error("%s", reopen_error)
+                        print(f"错误：{reopen_error}")
     except (ChatGPTBridgeError, EOFError, KeyboardInterrupt) as exc:
         if isinstance(exc, ChatGPTBridgeError):
             LOGGER.error("%s", exc)
