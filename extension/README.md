@@ -7,4 +7,4 @@
 - `manifest.json`：声明最小的 `alarms`、ChatGPT host permissions 和 content script matches。
 
 扩展不读取或保存密码、Cookie、Token 和系统剪贴板，也不调用 ChatGPT 私有 API。
-进度消息只在活动 Chat RPC 期间转发，不保存历史或 Session 状态。
+进度消息只在活动 Chat RPC 期间转发；内容脚本会把工具调用卡片、思考/状态区域的实际变化作为 `tool_call` 或 `working` 进度，不保存历史或 Session 状态。
