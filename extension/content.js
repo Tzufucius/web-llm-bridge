@@ -848,12 +848,11 @@ async function sendText(text) {
       await sleep(POLL_INTERVAL_MS);
     }
   }
-  throw (
-    lastError ||
-    new ContentBridgeError(
-      "PAGE_NOT_READY",
-      "ChatGPT 页面在限定时间内未完成加载",
-    )
+  throw new ContentBridgeError(
+    "PAGE_NOT_READY",
+    lastError
+      ? "ChatGPT 页面在限定时间内未完成加载，输入框或发送按钮仍不可用"
+      : "ChatGPT 页面在限定时间内未完成加载",
   );
 }
 
