@@ -141,6 +141,10 @@ web-llm-agent list-sessions --json
 
 当提交状态不确定时，Bridge 不会自动重发 Prompt。错误和重试语义见[协议文档](docs/protocol.zh-CN.md)。
 
+## Agent Skill
+
+Web LLM Bridge 附带仓库内维护的 Agent Skill，用于指导兼容的本地 Agent 何时以及如何通过 Bridge 咨询 Web LLM。详见 [skills/web-llm-bridge/SKILL.md](skills/web-llm-bridge/SKILL.md)。
+
 ## 支持的 Provider
 
 - [x] ChatGPT Web — Alpha
