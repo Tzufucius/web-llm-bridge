@@ -1,7 +1,7 @@
 # Agent CLI 示例
 
-先确认 `web-llm-broker serve` 正在运行，并且已认证的 ChatGPT 标签页已加载扩展。
-`web-llm-agent` 通过 Broker 操作 Session，不需要读取浏览器认证材料。
+先确认已认证的 ChatGPT 标签页已加载扩展。`web-llm-agent` 会自动启动或复用本机
+Broker，并通过 Broker 操作 Session，不需要读取浏览器认证材料。
 
 ## 建立或恢复 Session
 
@@ -28,21 +28,23 @@ web-llm-agent chat --text "列出三个可执行的测试步骤"
 Get-Content .\prompt.txt -Raw | web-llm-agent chat --stdin --json
 ```
 
-`--json` 会输出单行对象，便于脚本解析：
+`--json` 会把成功结果作为单行 JSON 对象写入 stdout，便于脚本解析：
 
 ```json
-{"id":"...","ok":true,"result":{"text":"..."}}
+{"text":"..."}
 ```
 
-失败时进程返回非零状态码，并输出类似下面的对象：
+进度和诊断信息写入 stderr。失败时进程返回非零状态码，并在 stderr 输出以 `Error:`
+开头的诊断；Agent 不应把人类可读诊断当作 JSON 结果。Broker 原始 NDJSON 协议的
+结构化错误格式如下：
 
 ```json
-{"id":"...","ok":false,"error":{"code":"DOM_CHANGED","message":"页面结构已变化","safe_to_retry":false}}
+{"id":"REQUEST_ID","ok":false,"error":{"code":"CHAT_STATE_UNKNOWN","message":"...","safe_to_retry":false}}
 ```
 
-脚本应按 `error.code` 和 `error.safe_to_retry` 决定后续动作。`SEND_FAILED` 或连接
-中断不代表 Prompt 一定没有提交，不能无条件重试；`RESPONSE_TIMEOUT` 也不应把半截
-文本当作成功答案。
+直接接入 Broker 协议或 Python API 的调用方应按 `error.code` 和 `safe_to_retry` 决定
+后续动作。`CHAT_STATE_UNKNOWN` 表示 Prompt 可能已经提交，不能自动重发；
+`RESPONSE_TIMEOUT` 也不应把不完整文本当作成功答案。
 
 ## 读取历史
 

@@ -1,89 +1,190 @@
-# 架构
+**English** | [简体中文](architecture.zh-CN.md)
 
-## 目标
+# Architecture
 
-项目把“浏览器中已经认证的页面”作为 ChatGPT 的执行端，把本机 Python 进程作为
-控制面。Python 不启动、接管或注入浏览器调试协议；所有页面交互由 Manifest V3
-Extension 在用户打开的 ChatGPT 标签页中完成。
+## Goal
 
-## 组件
+Web LLM Bridge uses an already authenticated browser page as the execution
+surface and a local Python process as the control plane. Python does not start
+the browser, attach a debugging protocol, or inject credentials. All page
+interaction runs in the Manifest V3 extension on a tab opened by the user or by
+the extension.
 
-```text
-CLI / 本地 Agent
-       |
-       | NDJSON，127.0.0.1:8766
-       v
-Persistent Broker ---- SessionStore（仅元数据）
-       |
-       | WebSocket，127.0.0.1:8765
-       v
-Manifest V3 Extension
-       |
-       v
-已认证的 ChatGPT Web 标签页
-```
+The public abstraction is a provider-neutral browser session, not an OpenAI API
+emulator. Site-specific DOM knowledge stays in the extension.
 
-### Extension
+## Repository layout
 
-Extension 维护到 Broker 的唯一 WebSocket 连接，负责创建或定位 ChatGPT 标签页、
-路由请求，并在内容脚本中完成 DOM 输入、发送、历史捕获和 Markdown/LaTeX 序列化。
-它不保存密码、Cookie、Token、Prompt 或 Session registry。
+| Path | Responsibility |
+| --- | --- |
+| `web_llm_bridge/` | Python protocol, transport, Provider metadata, Session management, Broker, Client, and CLI. |
+| `extension/core/` | Provider-independent browser runtime, routing, history, Markdown, RPC, and tab mechanics. |
+| `extension/providers/` | Site-specific profiles, DOM Adapters, and serializers. |
+| `tests/` | Python architecture/protocol regressions and synthetic Extension smoke tests. |
+| `docs/` | Architecture, protocol, Provider contracts, and implementation assumptions. |
+| `examples/` | Minimal Python and Agent CLI usage. |
+| `scripts/` | Cross-platform manual-console and Agent CLI launchers. |
 
-### Broker
-
-Broker 是唯一连接 Extension 的 Python 进程，也是多个 Agent 调用之间的 session
-owner。它负责：
-
-- 串行化同一个 Session 上的 open、chat、get-messages 操作；
-- 将本地 NDJSON 请求映射为 provider 操作；
-- 转发带 request ID 的 progress 事件；
-- 将会话元数据写入 `SessionStore`，并在重启后恢复 active 记录；
-- 将 provider 异常转换为稳定的结构化错误。
-
-Broker 不应缓存 Prompt 或回复正文，不应成为远程代理。默认只监听回环地址。
-
-### Provider
-
-Python Provider 把站点的 metadata、URL 规范化和 capabilities 暴露给 Broker，并
-提供统一的 open、chat、get-messages、close 方法。它不解析页面 DOM，也不保存
-selector 或站点认证状态。当前只有 ChatGPT provider，见 [providers/chatgpt.md](providers/chatgpt.md)。
-
-DOM 细节属于 Extension provider adapter：prompt discovery、send、submission detection、
-generation、completion、message extraction、turn identity、history scroll 和
-special serializer 都在浏览器侧执行。该边界使 Python provider 保持站点无关，也让
-页面 DOM 变化可以局部修复。
-
-### SessionStore
-
-SessionStore 保存可恢复绑定所需的最小元数据：Session ID、tab ID（如果可得）、当前
-Conversation URL、创建和更新时间、sequence、active。它不保存消息正文或认证材料。
-删除运行时 registry 不会删除浏览器中的 Conversation。
-
-## 依赖方向
+## Process topology
 
 ```text
-cli -> broker client -> broker server -> Python provider -> extension protocol
-                                      \-> session store
-                                                   \-> Extension provider adapter -> DOM
+CLI / local agent / WebLLMSession
+              |
+              | NDJSON over TCP, 127.0.0.1:8766
+              v
+Persistent Broker
+  SessionManager ---- SessionStore (metadata only)
+        |
+        | one ExtensionTransport
+        | WebSocket, 127.0.0.1:8765
+        v
+Manifest V3 extension
+  service worker ---- provider registry / tab routing
+        |
+        v
+content runtime ---- provider adapter ---- authenticated web page
 ```
 
-Python provider 不应反向依赖 CLI 的输出格式；CLI 也不应直接访问 Extension。这样
-可以让 Agent 使用稳定的 Broker 协议，并让 DOM 适配变化停留在 Extension 边界内。
+Both listeners bind to the loopback interface. They are local IPC boundaries,
+not remotely exposed service APIs.
 
-## 一次请求的生命周期
+## Ownership boundaries
 
-1. CLI 为请求生成唯一 `id`，向 `127.0.0.1:8766` 发送一行 NDJSON。
-2. Broker 校验方法和参数，获取当前 Session，并取得操作锁。
-3. Provider 通过 Extension 向 ChatGPT 标签页执行操作。
-4. 长操作期间，Extension 和 Broker 可发送带同一 `id` 的 progress 事件。
-5. 页面完成、失败或达到连续空闲超时后，Broker 发送一条最终 response，并释放锁。
-6. Broker 更新 Session 元数据；调用方根据 `ok` 和错误码决定是否重试。
+### Client and session handle
 
-`chat` 在提交状态不确定时不得自动重发原 Prompt。关闭标签页后的读取可以按显式
-策略恢复绑定；恢复后的重试次数必须有限，避免重复执行副作用。
+`WebLLMClient` sends one Broker RPC per connection. `WebLLMSession` is a small,
+Broker-backed handle containing `provider`, `session_id`, `conversation_url`,
+and `reopen_on_closed`. It does not own a tab, a WebSocket, the Broker process,
+or credentials. Leaving its async context does not close any shared resource.
 
-## 并发与故障
+There is no public `close` RPC in the current protocol. `SessionManager.close()`
+exists only to shut down the Broker-owned transport during Broker teardown.
 
-同一 Broker 同时只允许一个活动的 Chat 操作。连接断开、页面 DOM 改变、会话不存在、
-响应无活动超时和 Extension 未连接都必须转成错误码，而不是返回半截成功结果。进度
-消息只是观测信息，不改变最终 RPC 的返回结构。
+### Broker and SessionManager
+
+The Broker is the only Python process that listens for the extension. It:
+
+- validates and dispatches local NDJSON requests;
+- owns one `SessionManager`, one provider registry, one `SessionStore`, and one
+  `ExtensionTransport`;
+- rewrites extension progress into Broker progress correlated to the caller's
+  request ID;
+- converts typed failures into stable error objects; and
+- rejects responses that would exceed the 8 MiB NDJSON line limit.
+
+`SessionManager` owns orchestration and recovery policy. Its current single
+`asyncio.Lock` serializes all `open`, `chat`, and `get_messages` operations for
+the manager, including operations for different sessions or providers.
+`list_sessions` only reads metadata and does not acquire that lock.
+
+The Broker does not intentionally persist prompts or response bodies and is not
+a remote proxy.
+
+### Session and SessionStore
+
+A session is a durable binding record, not a copy of a web conversation. The
+store persists schema version, provider ID, session ID, tab ID, current URL,
+creation/update timestamps, sequence, active status, and
+`reopen_on_closed`. Only one stored record per provider is active.
+
+`sequence` is incremented and persisted before each chat dispatch. It therefore
+counts chat attempts, including attempts that later fail; it is not proof that a
+message was accepted by the page.
+
+The store contains neither message bodies nor authentication material. Removing
+the local registry does not delete a conversation on the provider website.
+
+### Python provider definition
+
+A Python `ProviderDefinition` is immutable, static metadata: `id`,
+`default_url`, allowed `hosts`, `capabilities`, and HTTPS URL normalization. It
+has no DOM selectors, connection state, or `open`/`chat`/`get_messages` methods.
+
+`SessionManager`, rather than a provider instance, invokes the shared
+`ExtensionTransport`. This keeps provider registration separate from transport
+ownership and prevents each provider from opening another listener.
+
+### ExtensionTransport
+
+The Broker-owned transport is the only listener on `127.0.0.1:8765`. It accepts
+one active extension connection, checks the Chrome-extension Origin and protocol
+version, correlates requests and responses, filters progress phases, and manages
+timeouts. Its request IDs are internal transport IDs; they are not required to
+equal the caller's NDJSON request IDs.
+
+For chat, accepted progress resets the transport wait deadline. The content
+runtime independently enforces the five-minute effective-page-activity timeout,
+so heartbeat-style progress cannot turn an inactive page into a successful
+completion.
+
+### Extension core and provider adapter
+
+The service worker owns the Broker connection and tab routing. The content
+runtime owns generic input, submission confirmation, progress production,
+completion waiting, history capture, and Markdown traversal.
+
+The extension provider supplies site-specific metadata and behavior:
+
+- URL matching and normalization;
+- selectors and prompt/send/generation discovery;
+- message roles, turn identity, completion markers, and activity snapshots; and
+- special serialization such as ChatGPT KaTeX extraction.
+
+The extension never needs passwords, cookies, tokens, private conversation
+APIs, DevTools/CDP, or clipboard access.
+
+## Dependency direction
+
+```text
+CLI / WebLLMSession -> Broker client -> Broker server -> SessionManager
+                                                   |-> SessionStore
+                                                   |-> ProviderRegistry
+                                                   `-> ExtensionTransport
+                                                          |
+                                                          v
+extension core -> extension provider adapter -> page DOM
+```
+
+CLI formatting must not leak into providers. Python provider definitions must
+not depend on the CLI or extension DOM modules. Generic extension core may call
+the registered adapter, but an adapter must not own the Broker transport.
+
+## Chat request lifecycle
+
+1. The client creates a non-empty string `id` and sends one UTF-8 JSON object as
+   an NDJSON line to `127.0.0.1:8766`.
+2. The Broker validates the envelope, then `SessionManager` acquires the global
+   operation lock and resolves or creates a session record.
+3. Before dispatch, the manager increments the stored session `sequence`.
+4. `ExtensionTransport` creates its own request ID and sends the operation to
+   the service worker, which verifies the requested provider against the tab URL
+   and forwards it to the content script.
+5. The content runtime writes the prompt, clicks Send, and waits for submission
+   evidence. Only then does it emit `submitted`.
+6. While waiting for final content, the extension emits allowed progress phases.
+   The transport correlates them to its pending call; the Broker re-emits them
+   with the original NDJSON `id`.
+7. After stable final content, the response travels back through the same
+   layers. The manager updates the URL and session metadata, releases the lock,
+   and the Broker sends exactly one final response.
+
+Progress is observational. It never constitutes success and never replaces the
+final response.
+
+## Failure and retry invariants
+
+Chat is a side-effecting operation. Once dispatch to the content script has
+started, a tab closure or messaging failure may leave submission state unknown.
+The extension maps that ambiguity to `CHAT_STATE_UNKNOWN` with
+`safe_to_retry: false`. Neither `SessionManager` nor the client resends the
+prompt automatically.
+
+If a closed tab is known before content dispatch, the extension can report
+`TAB_CLOSED` with `safe_to_retry: true`. With `reopen_on_closed` enabled,
+`get_messages` rebinds and retries once. For `chat`, the manager may rebind for a
+future operation but still raises the original failure and never replays the
+prompt.
+
+All errors are failures, even when `safe_to_retry` is true. The flag only states
+whether repeating that same RPC is known not to duplicate a page-side effect at
+the boundary where the error was produced.
