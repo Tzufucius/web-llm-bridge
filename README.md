@@ -79,8 +79,8 @@ The installed `web-llm-agent` launcher can also start or reuse a local Broker wh
 
 The [`scripts/`](scripts/) directory provides cross-platform Python launchers:
 
-- `python scripts/agent_cli.py ...` runs one Agent CLI command and starts or reuses the local Broker.
-- `python scripts/manual_console.py` starts or reuses the Broker and opens the interactive console.
+- `python scripts/agent_cli.py ...` runs one Agent CLI command for an agent and starts or reuses the local Broker.
+- `python scripts/manual_console.py` starts or reuses the Broker and opens a human-facing interactive console for directly selecting sessions, sending messages, and reading history.
 
 For example:
 
@@ -143,15 +143,13 @@ The bridge avoids automatically resending prompts when submission state is uncer
 
 ## Supported Providers
 
-| Provider | Status |
-| --- | --- |
-| ChatGPT Web | ☑ Alpha |
-| Grok Cloud | ☐ Planned |
-| Kimi | ☐ Planned |
-| DeepSeek | ☐ Planned |
-| Doubao | ☐ Planned |
-| Gemini | ☐ Planned |
-| Google AI Studio | ☐ Planned |
+- [x] ChatGPT Web — Alpha
+- [ ] Grok Cloud — Planned
+- [ ] Kimi — Planned
+- [ ] DeepSeek — Planned
+- [ ] Doubao — Planned
+- [ ] Gemini — Planned
+- [ ] Google AI Studio — Planned
 
 The current release focuses on stabilizing the ChatGPT adapter before additional providers are added.
 

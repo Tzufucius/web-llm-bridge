@@ -79,8 +79,8 @@ web-llm-broker serve
 
 [`scripts/`](scripts/) 目录提供跨平台 Python 启动脚本：
 
-- `python scripts/agent_cli.py ...` 执行一次 Agent CLI 命令，并启动或复用本机 Broker。
-- `python scripts/manual_console.py` 启动或复用 Broker，然后进入交互式控制台。
+- `python scripts/agent_cli.py ...` 面向 Agent 执行一次 CLI 命令，并启动或复用本机 Broker。
+- `python scripts/manual_console.py` 启动或复用 Broker，然后进入面向人类用户的交互式控制台，可直接选择 Session、发送消息和读取历史。
 
 例如：
 
@@ -143,15 +143,13 @@ web-llm-agent list-sessions --json
 
 ## 支持的 Provider
 
-| Provider | 状态 |
-| --- | --- |
-| ChatGPT Web | ☑ Alpha |
-| Grok Cloud | ☐ Planned |
-| Kimi | ☐ Planned |
-| DeepSeek | ☐ Planned |
-| 豆包 | ☐ Planned |
-| Gemini | ☐ Planned |
-| Google AI Studio | ☐ Planned |
+- [x] ChatGPT Web — Alpha
+- [ ] Grok Cloud — Planned
+- [ ] Kimi — Planned
+- [ ] DeepSeek — Planned
+- [ ] 豆包 — Planned
+- [ ] Gemini — Planned
+- [ ] Google AI Studio — Planned
 
 当前版本将优先稳定 ChatGPT Adapter，再增加其他 Provider。
 
