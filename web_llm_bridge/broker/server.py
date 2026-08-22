@@ -134,8 +134,8 @@ class BrokerServer:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Web LLM persistent broker")
-    parser.add_argument("command", nargs="?", choices=["serve"], default="serve")
+    parser = argparse.ArgumentParser(description="Run the persistent local Web LLM Broker.")
+    parser.add_argument("command", nargs="?", choices=["serve"], default="serve", help="Start serving Broker and Extension connections.")
     parser.parse_args(argv)
     try:
         asyncio.run(BrokerServer().serve_forever())

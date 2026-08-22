@@ -12,32 +12,32 @@ from ..client import rpc_call
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Web LLM Broker client")
+    parser = argparse.ArgumentParser(description="Send one command to the local Web LLM Broker.")
     commands = parser.add_subparsers(dest="command", required=True)
-    opened = commands.add_parser("open")
+    opened = commands.add_parser("open", help="Open, create, or restore a browser session.")
     group = opened.add_mutually_exclusive_group()
-    group.add_argument("--new", action="store_true")
-    group.add_argument("--url")
-    group.add_argument("--session-id")
-    opened.add_argument("--provider", default="chatgpt")
-    opened.add_argument("--reopen-on-closed", action="store_true", default=None)
-    opened.add_argument("--json", action="store_true")
-    chat = commands.add_parser("chat")
+    group.add_argument("--new", action="store_true", help="Create a new conversation.")
+    group.add_argument("--url", help="Open or restore this conversation URL.")
+    group.add_argument("--session-id", help="Restore a persisted session by ID.")
+    opened.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    opened.add_argument("--reopen-on-closed", action="store_true", default=None, help="Reopen a closed browser tab when possible.")
+    opened.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
+    chat = commands.add_parser("chat", help="Send one prompt and wait for the response.")
     text_source = chat.add_mutually_exclusive_group(required=True)
-    text_source.add_argument("--text")
-    text_source.add_argument("--stdin", action="store_true")
-    chat.add_argument("--session-id")
-    chat.add_argument("--provider", default="chatgpt")
-    chat.add_argument("--json", action="store_true")
-    history = commands.add_parser("get-messages")
-    history.add_argument("--limit", type=int, default=5)
-    history.add_argument("--all", action="store_true", dest="full")
-    history.add_argument("--session-id")
-    history.add_argument("--provider", default="chatgpt")
-    history.add_argument("--json", action="store_true")
-    listed = commands.add_parser("list-sessions")
-    listed.add_argument("--provider", default="chatgpt")
-    listed.add_argument("--json", action="store_true")
+    text_source.add_argument("--text", help="Prompt text.")
+    text_source.add_argument("--stdin", action="store_true", help="Read the prompt from stdin.")
+    chat.add_argument("--session-id", help="Target session ID; defaults to the active session.")
+    chat.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    chat.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
+    history = commands.add_parser("get-messages", help="Read messages from the bound browser tab.")
+    history.add_argument("--limit", type=int, default=5, help="Maximum messages to return (default: 5).")
+    history.add_argument("--all", action="store_true", dest="full", help="Return the complete collected history.")
+    history.add_argument("--session-id", help="Target session ID; defaults to the active session.")
+    history.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    history.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
+    listed = commands.add_parser("list-sessions", help="List persisted sessions.")
+    listed.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    listed.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     return parser
 
 
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except Exception as exc:
-        print(f"错误：{exc}", file=sys.stderr)
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
 

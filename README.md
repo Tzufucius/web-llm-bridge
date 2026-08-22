@@ -41,17 +41,16 @@ ChatGPT Web。
 
 ## 安装
 
-要求 Python 3.11 或更高版本。推荐在独立虚拟环境中安装：
+要求 Python 3.11 或更高版本。请在当前操作系统选定的虚拟环境中执行：
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python -m pip install -U pip
-.\.venv\Scripts\python -m pip install -e .
+```console
+python -m pip install -U pip
+python -m pip install -e .
 ```
 
 也可以只安装运行依赖：
 
-```powershell
+```console
 python -m pip install -r requirements.txt
 ```
 
@@ -71,38 +70,37 @@ Broker 未启动时会自动重连。扩展最低要求 Chrome/Edge 120。
 
 ## 启动与使用
 
-### Windows 一键进入交互终端
+### 跨平台 Python 启动入口
 
-在仓库根目录执行：
+人工交互控制台会自动启动或复用 Broker：
 
-```powershell
-.\start.ps1
+```bash
+python scripts/manual_console.py
 ```
 
-脚本会检查 Python 和依赖，启动或复用本机 Broker，然后直接进入人机交互 CLI。首次
-使用且尚未安装依赖时，执行 `.\start.ps1 -Setup`；该选项会以 editable 模式安装
-当前项目。其他维护入口如下：
+智能体通过第二个入口执行单次 CLI 命令：
 
-```powershell
-.\start.ps1 -CheckOnly   # 检查解释器、Broker 和 Extension 路径
-.\start.ps1 -BrokerOnly  # 仅启动 Broker，不进入交互终端
-.\start.ps1 -StopBroker  # 停止由脚本启动并记录的 Broker
+```bash
+python scripts/agent_cli.py list-sessions --json
+python scripts/agent_cli.py open --new --json
+python scripts/agent_cli.py chat --text "Reply with 123" --json
 ```
 
-浏览器扩展仍需由用户在 Chrome/Edge 中加载并完成登录；启动脚本不会读取认证信息，
-也不会自动操作浏览器。
+两个脚本只依赖 Python，适用于 Windows、macOS 和 Linux。Broker 日志和 PID 写入
+`${WEB_LLM_BRIDGE_HOME:-~/.web-llm-bridge}/runtime`。浏览器扩展仍需由用户在
+Chrome/Edge 中加载并完成登录；脚本不会读取认证信息，也不会自动操作浏览器。
 
 ### 分步启动
 
 先启动唯一持有 Extension WebSocket 的 Broker：
 
-```powershell
+```console
 web-llm-broker serve
 ```
 
 再打开交互式终端：
 
-```powershell
+```console
 web-llm-bridge
 ```
 
@@ -115,7 +113,7 @@ web-llm-bridge
 Agent CLI 面向脚本和 Shell Agent，默认输出适合人读的文本；加 `--json` 输出一行
 一个 JSON 对象（NDJSON）：
 
-```powershell
+```console
 web-llm-agent list-sessions --json
 web-llm-agent open --new --json
 web-llm-agent chat --text "请用三句话总结今天的工作"
@@ -123,8 +121,8 @@ web-llm-agent chat --text "请用三句话总结今天的工作"
 
 长文本从 stdin 传入，不需要把内容拼接到命令行参数：
 
-```powershell
-Get-Content prompt.txt -Raw | web-llm-agent chat --stdin --json
+```console
+web-llm-agent chat --stdin --json
 ```
 
 Broker 的 NDJSON 请求至少包含 `id`、`method` 和 `params`；响应包含同一个 `id`、
@@ -138,9 +136,9 @@ Broker 的 NDJSON 请求至少包含 `id`、`method` 和 `params`；响应包含
 provider submodule。首次获取父仓库时，需要通过 GitHub HTTPS authentication 访问
 父仓库及其 submodule：
 
-```powershell
+```console
 git clone --recurse-submodules https://github.com/Tuzfucius/math-modeling.git
-Set-Location math-modeling
+cd math-modeling
 git submodule update --init --recursive
 ```
 

@@ -24,8 +24,8 @@ classifiers = [
 ]
 
 [project.scripts]
-web-llm-bridge = "web_llm_bridge.cli.interactive:main"
-web-llm-agent = "web_llm_bridge.cli.agent:main"
+web-llm-bridge = "web_llm_bridge.cli.launcher:manual_main"
+web-llm-agent = "web_llm_bridge.cli.launcher:agent_main"
 web-llm-broker = "web_llm_bridge.broker.server:main"
 
 [tool.setuptools.packages.find]

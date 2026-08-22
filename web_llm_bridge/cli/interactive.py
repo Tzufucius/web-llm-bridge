@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import argparse
 import sys
+from typing import Sequence
 
 from ..session.model import WebLLMSession
 
 
 async def _run() -> int:
-    target = await asyncio.to_thread(input, "会话（回车恢复，new 新建，或输入 URL）> ")
+    target = await asyncio.to_thread(input, "Session (Enter to resume, 'new' to create, or URL)> ")
     if target.strip().lower() == "new":
         session = await WebLLMSession.open(new=True)
     elif target.strip():
@@ -45,7 +47,14 @@ async def _run() -> int:
         print(await session.chat(text, progress=progress))
 
 
-def main() -> int:
+def _parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        description="Open an interactive console backed by the local Web LLM Broker."
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    _parser().parse_args(argv)
     try:
         return asyncio.run(_run())
     except KeyboardInterrupt:
