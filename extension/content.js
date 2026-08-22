@@ -217,8 +217,10 @@ function serializeMath(element) {
     return "";
   }
   const display =
-    element.matches('.katex-display, [display="true"]') ||
-    Boolean(element.closest('.katex-display, [display="true"]'));
+    element.matches('.katex-display, [display="block"], [display="true"]') ||
+    Boolean(
+      element.closest('.katex-display, [display="block"], [display="true"]'),
+    );
   return display ? `\n$$\n${tex}\n$$\n` : `$${tex}$`;
 }
 
