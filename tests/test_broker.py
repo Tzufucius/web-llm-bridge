@@ -17,7 +17,7 @@ class FakeSession:
         self._progress_callback = None
 
     @classmethod
-    async def open(cls, url: str, reopen_on_closed: bool = True):
+    async def open(cls, url: str, reopen_on_closed: bool = True, **_kwargs):
         cls.opens += 1
         return cls(url)
 

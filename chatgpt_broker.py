@@ -104,13 +104,17 @@ class PersistentChatGPTBroker:
         return self._store.save(record)
 
     def _find_by_url(self, url: str) -> dict[str, Any] | None:
-        if hasattr(self._store, "find_by_url"):
-            return self._store.find_by_url(url)
         normalized = normalize_conversation_url(url)
-        return next(
-            (record for record in self._list_records() if record.get("current_url") == normalized),
-            None,
-        )
+        for record in self._list_records():
+            current_url = record.get("current_url")
+            if not isinstance(current_url, str):
+                continue
+            try:
+                if normalize_conversation_url(current_url) == normalized:
+                    return record
+            except ChatGPTBridgeError:
+                continue
+        return None
 
     def _deactivate_all(self) -> None:
         if hasattr(self._store, "deactivate_all"):
@@ -120,15 +124,21 @@ class PersistentChatGPTBroker:
             record["active"] = False
             self._save_record(record)
 
-    async def _new_session(self, url: str, session_id: str | None = None) -> dict[str, Any]:
+    async def _new_session(
+        self,
+        url: str,
+        session_id: str | None = None,
+        *,
+        force_new: bool = False,
+    ) -> dict[str, Any]:
         normalized_url = normalize_conversation_url(url)
         if self._session is not None and hasattr(self._session, "_shutdown"):
             await self._session._shutdown()
             self._session = None
-        session = await self._session_factory.open(
-            normalized_url,
-            reopen_on_closed=True,
-        )
+        open_kwargs = {"reopen_on_closed": True}
+        if force_new:
+            open_kwargs["new"] = True
+        session = await self._session_factory.open(normalized_url, **open_kwargs)
         self._session = session
         self._session_id = session_id or str(uuid4())
         self._sequence = 0
@@ -182,7 +192,7 @@ class PersistentChatGPTBroker:
         if url is None:
             url = SESSION_DEFAULT_URL
         requested_id = None if new else (requested_record or {}).get("session_id")
-        record = await self._new_session(url, requested_id)
+        record = await self._new_session(url, requested_id, force_new=new)
         return record
 
     async def open(

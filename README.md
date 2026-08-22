@@ -64,6 +64,8 @@ Edge 使用同样步骤，入口为 `edge://extensions`。扩展最低要求 Chr
 ## 启动流程
 
 ```powershell
+python tools/chatgpt_web_bridge/chatgpt_broker.py serve
+# 另开一个终端运行 Human CLI
 python tools/chatgpt_web_bridge/chatgpt_web_bridge.py
 ```
 

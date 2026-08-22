@@ -520,13 +520,21 @@ class ChatGPTSession:
         cls,
         url: str,
         reopen_on_closed: bool = False,
+        *,
+        new: bool = False,
+        tab_id: int | None = None,
     ) -> "ChatGPTSession":
         normalized_url = cls._validate_url(url)
         transport = await _acquire_shared_transport()
         try:
+            open_params: dict[str, Any] = {"url": normalized_url}
+            if new:
+                open_params["new"] = True
+            if isinstance(tab_id, int):
+                open_params["tab_id"] = tab_id
             result = await transport.request(
                 "open",
-                {"url": normalized_url},
+                open_params,
                 timeout_ms=EXTENSION_CONNECT_TIMEOUT_MS,
             )
             tab_id = result.get("tab_id")
@@ -679,7 +687,7 @@ class ChatGPTSession:
         self._ensure_open()
         result = await self._request(
             "open",
-            {"url": self._current_url},
+            {"url": self._current_url, "tab_id": self._tab_id},
             timeout_ms=EXTENSION_CONNECT_TIMEOUT_MS,
         )
         tab_id = result.get("tab_id")
@@ -913,7 +921,7 @@ def _print_sessions(store: SessionStore) -> None:
         )
 
 
-async def main() -> None:
+async def _legacy_main() -> None:
     session: ChatGPTSession | None = None
     progress_renderer: _CliProgressRenderer | None = None
     session_store = SessionStore()
@@ -1047,6 +1055,90 @@ async def main() -> None:
             progress_renderer.clear()
         if session is not None:
             await session._shutdown()
+
+
+async def main() -> None:
+    """Human CLI：通过 Persistent Broker，不再直接拥有 :8765。"""
+    try:
+        from .chatgpt_agent_cli import rpc_call
+    except ImportError:  # direct script execution
+        from chatgpt_agent_cli import rpc_call  # type: ignore
+
+    try:
+        open_existing = await _prompt_start_mode()
+        open_params: dict[str, Any] = {}
+        if open_existing:
+            url = (await _ainput("请输入 ChatGPT Conversation URL：\n> ")).strip()
+            if not url:
+                raise ChatGPTBridgeError("URL 不能为空", "INVALID_URL")
+            if _is_home_url(url):
+                open_params["new"] = True
+            else:
+                open_params["url"] = url
+        else:
+            print("将复用 Broker 当前 active Session；没有时创建新 Conversation。")
+
+        response, _ = await rpc_call("open", open_params)
+        if response.get("ok") is not True:
+            error = response.get("error") or {}
+            raise ChatGPTBridgeError(
+                str(error.get("message", "Broker open 失败")),
+                str(error.get("code", "INTERNAL_ERROR")),
+            )
+        result = response.get("result") or {}
+        print(f"Session：{result.get('session_id')}")
+        print(f"当前 URL：{result.get('conversation_url')}")
+        print("提示：/history、/sessions、/exit")
+
+        while True:
+            try:
+                command = (await _ainput("你 > ")).strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if command in {"/exit", "/quit"}:
+                break
+            if command == "/sessions":
+                response, _ = await rpc_call("list_sessions", {})
+                if response.get("ok") is not True:
+                    print(f"错误：{response.get('error')}")
+                    continue
+                records = (response.get("result") or {}).get("sessions", [])
+                for record in records:
+                    marker = " *" if record.get("active") else ""
+                    print(
+                        f"{record.get('session_id')}{marker}\n"
+                        f"  URL: {record.get('conversation_url')}\n"
+                        f"  更新时间: {record.get('updated_at')}"
+                    )
+                selected = (await _ainput("输入 Session ID 切换，直接回车保持当前：\n> ")).strip()
+                if selected:
+                    response, _ = await rpc_call("open", {"session_id": selected})
+                    if response.get("ok") is True:
+                        print(f"已切换到 Session：{selected}")
+                    else:
+                        print(f"错误：{response.get('error')}")
+                continue
+            if command == "/history" or command.startswith("/history "):
+                limit, full = _parse_history_command(command)
+                params = {"limit": limit or DEFAULT_HISTORY_LIMIT, "full": full}
+                response, _ = await rpc_call("get_messages", params)
+                if response.get("ok") is True:
+                    _print_history((response.get("result") or {}).get("messages", []))
+                else:
+                    print(f"错误：{response.get('error')}")
+                continue
+            if not command:
+                continue
+            response, _ = await rpc_call("chat", {"text": command})
+            if response.get("ok") is True:
+                print(f"ChatGPT > {(response.get('result') or {}).get('text', '')}")
+            else:
+                print(f"错误：{response.get('error')}")
+    except (ChatGPTBridgeError, EOFError, KeyboardInterrupt) as exc:
+        if isinstance(exc, ChatGPTBridgeError):
+            LOGGER.error("%s", exc)
+            print(f"错误：{exc}")
 
 
 if __name__ == "__main__":
