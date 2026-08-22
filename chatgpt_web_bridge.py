@@ -1,75 +1,342 @@
-"""通过 Playwright 操作 ChatGPT 网页的最小 Web Bridge。
+"""通过浏览器扩展桥接 ChatGPT Web 的最小 Python Bridge。
 
 安装依赖::
 
-    pip install playwright
-    playwright install chromium
+    pip install websockets
 
-本工具只通过 ChatGPT 网页 DOM 工作，不调用 OpenAI API、ChatGPT 私有接口，
-也不抓取网络请求。持久化浏览器 Profile 位于本文件同目录下的
-``chatgpt_browser_profile``，首次运行时需要在可见浏览器中手动登录。
+Python 只负责 localhost WebSocket RPC、Session 和 CLI；ChatGPT DOM 由
+``extension/content.js`` 负责。浏览器登录状态完全由用户正常使用的
+Chrome/Edge 管理，本程序不会读取或保存密码、Cookie、Token，也不会启动浏览器。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import time
-from pathlib import Path
-from typing import Final
+from typing import Any, Final
 from urllib.parse import urlparse
+from uuid import uuid4
 
-from playwright.async_api import (
-    BrowserContext,
-    Error as PlaywrightError,
-    Locator,
-    Page,
-    Playwright,
-    TimeoutError as PlaywrightTimeoutError,
-    async_playwright,
-)
+try:
+    from websockets.asyncio.server import serve
+except ImportError:  # websockets 旧版本兼容
+    from websockets import serve
+
+from websockets.exceptions import ConnectionClosed
 
 
 # =========================
 # Configuration
 # =========================
 
-PROFILE_DIR: Final[Path] = Path(__file__).resolve().parent / "chatgpt_browser_profile"
-SESSION_METADATA_FILE: Final[Path] = PROFILE_DIR / "session_metadata.json"
-HEADLESS: Final[bool] = False
-BROWSER_CHANNEL: Final[str | None] = None
-PAGE_LOAD_TIMEOUT_MS: Final[int] = 60_000
+BRIDGE_HOST: Final[str] = "127.0.0.1"
+BRIDGE_PORT: Final[int] = 8765
+PROTOCOL_VERSION: Final[int] = 1
+EXTENSION_CONNECT_TIMEOUT_MS: Final[int] = 30_000
+RPC_TIMEOUT_MS: Final[int] = 30_000
 RESPONSE_TIMEOUT_MS: Final[int] = 180_000
-STABLE_TIME_MS: Final[int] = 1_000
-POLL_INTERVAL_MS: Final[int] = 200
-
-PROMPT_SELECTORS: Final[list[str]] = [
-    "#prompt-textarea",
-    '[contenteditable="true"][role="textbox"]',
-]
-SEND_BUTTON_SELECTORS: Final[list[str]] = [
-    "#composer-submit-button",
-    '[data-testid="send-button"]',
-    'button[aria-label="Send prompt"]',
-]
-STOP_BUTTON_SELECTORS: Final[list[str]] = [
-    '[data-testid="stop-button"]',
-    'button[aria-label*="Stop"]',
-]
-MESSAGE_SELECTOR: Final[str] = "[data-message-author-role]"
-ASSISTANT_SELECTOR: Final[str] = '[data-message-author-role="assistant"]'
 ALLOWED_HOSTS: Final[set[str]] = {"chatgpt.com", "www.chatgpt.com"}
 
 LOGGER = logging.getLogger("chatgpt_web_bridge")
 
 
 # =========================
-# Exceptions
+# Errors
 # =========================
 
 
+ERROR_MESSAGES: Final[dict[str, str]] = {
+    "EXTENSION_NOT_CONNECTED": "尚未检测到 ChatGPT Web Bridge 浏览器扩展",
+    "EXTENSION_ALREADY_CONNECTED": "已有浏览器扩展连接到 Bridge",
+    "INVALID_URL": "仅支持 https://chatgpt.com 或 https://www.chatgpt.com",
+    "PAGE_NOT_READY": "ChatGPT 页面尚未准备完成",
+    "TAB_CLOSED": "绑定的 ChatGPT 标签页已关闭",
+    "CONTENT_SCRIPT_UNAVAILABLE": "ChatGPT 内容脚本不可用",
+    "PROMPT_NOT_FOUND": "未找到 ChatGPT 输入框",
+    "INPUT_FAILED": "文本未成功写入 ChatGPT 输入框",
+    "SEND_BUTTON_NOT_FOUND": "未找到可靠的 ChatGPT 发送按钮",
+    "BUSY": "ChatGPT 当前仍在生成回复",
+    "RESPONSE_TIMEOUT": "等待 ChatGPT 回复超时",
+    "DOM_CHANGED": "ChatGPT 页面结构可能已经发生变化",
+    "INTERNAL_ERROR": "ChatGPT Web Bridge 内部错误",
+    "RPC_TIMEOUT": "等待浏览器扩展响应超时",
+}
+
+
 class ChatGPTBridgeError(RuntimeError):
-    """ChatGPT 页面交互失败。"""
+    """ChatGPT Web Bridge 操作失败。"""
+
+    def __init__(self, message: str, code: str = "INTERNAL_ERROR") -> None:
+        self.code = code
+        super().__init__(message)
+
+
+class _BridgeRPCError(RuntimeError):
+    """Extension 返回的内部 RPC 错误。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
+def _error_message(code: str, fallback: str | None = None) -> str:
+    return ERROR_MESSAGES.get(code, fallback or ERROR_MESSAGES["INTERNAL_ERROR"])
+
+
+# =========================
+# WebSocket Transport
+# =========================
+
+
+class _BridgeTransport:
+    """单个 Extension WebSocket client 的 JSON RPC transport。"""
+
+    def __init__(self) -> None:
+        self._server: Any | None = None
+        self._client: Any | None = None
+        self._connection_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
+        self._client_ready = asyncio.Event()
+        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._closed = False
+
+    async def start(self) -> None:
+        if self._server is not None:
+            return
+        try:
+            self._server = await serve(
+                self._handle_connection,
+                BRIDGE_HOST,
+                BRIDGE_PORT,
+                ping_interval=None,
+            )
+        except OSError as exc:
+            raise ChatGPTBridgeError(
+                f"无法监听 {BRIDGE_HOST}:{BRIDGE_PORT}，可能已有 Bridge 正在运行",
+                "INTERNAL_ERROR",
+            ) from exc
+        LOGGER.info("WebSocket Bridge 已监听 ws://%s:%s", BRIDGE_HOST, BRIDGE_PORT)
+
+    async def wait_extension(self, timeout_ms: int = EXTENSION_CONNECT_TIMEOUT_MS) -> None:
+        if self._closed:
+            raise _BridgeRPCError("EXTENSION_NOT_CONNECTED", "Bridge 已关闭")
+        if self._client_ready.is_set():
+            return
+        try:
+            await asyncio.wait_for(
+                self._client_ready.wait(),
+                timeout=timeout_ms / 1000,
+            )
+        except asyncio.TimeoutError as exc:
+            raise _BridgeRPCError(
+                "EXTENSION_NOT_CONNECTED",
+                _error_message("EXTENSION_NOT_CONNECTED"),
+            ) from exc
+
+    async def request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout_ms: int = RPC_TIMEOUT_MS,
+    ) -> dict[str, Any]:
+        await self.wait_extension()
+        request_id = str(uuid4())
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
+        request = {
+            "type": "request",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        }
+
+        try:
+            async with self._send_lock:
+                client = self._client
+                if client is None:
+                    raise _BridgeRPCError(
+                        "EXTENSION_NOT_CONNECTED",
+                        _error_message("EXTENSION_NOT_CONNECTED"),
+                    )
+                await client.send(json.dumps(request, ensure_ascii=False))
+
+            response = await asyncio.wait_for(
+                asyncio.shield(future),
+                timeout=timeout_ms / 1000,
+            )
+        except asyncio.TimeoutError as exc:
+            raise _BridgeRPCError("RPC_TIMEOUT", _error_message("RPC_TIMEOUT")) from exc
+        except _BridgeRPCError:
+            raise
+        except (ConnectionClosed, OSError) as exc:
+            raise _BridgeRPCError(
+                "EXTENSION_NOT_CONNECTED",
+                _error_message("EXTENSION_NOT_CONNECTED"),
+            ) from exc
+        finally:
+            self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+
+        if response.get("type") != "response" or response.get("id") != request_id:
+            raise _BridgeRPCError("INTERNAL_ERROR", "Extension 返回了无效 RPC 响应")
+        if response.get("ok") is not True:
+            error = response.get("error")
+            if not isinstance(error, dict):
+                raise _BridgeRPCError("INTERNAL_ERROR", "Extension 返回了无效错误")
+            code = str(error.get("code", "INTERNAL_ERROR"))
+            message = str(error.get("message", _error_message(code)))
+            raise _BridgeRPCError(code, message)
+
+        result = response.get("result", {})
+        if not isinstance(result, dict):
+            raise _BridgeRPCError("INTERNAL_ERROR", "Extension 返回了无效结果")
+        return result
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._client_ready.clear()
+        self._fail_pending(
+            _BridgeRPCError("EXTENSION_NOT_CONNECTED", "Bridge 已关闭")
+        )
+
+        client = self._client
+        self._client = None
+        if client is not None:
+            try:
+                await client.close()
+            except (ConnectionClosed, OSError):
+                pass
+
+        server = self._server
+        self._server = None
+        if server is not None:
+            server.close()
+            await server.wait_closed()
+        LOGGER.info("WebSocket Bridge 已关闭")
+
+    async def _handle_connection(self, websocket: Any, _path: str | None = None) -> None:
+        try:
+            raw_message = await asyncio.wait_for(websocket.recv(), timeout=5)
+            hello = self._decode_message(raw_message)
+            if (
+                hello.get("type") != "hello"
+                or hello.get("protocol_version") != PROTOCOL_VERSION
+            ):
+                await self._send_json(
+                    websocket,
+                    {
+                        "type": "error",
+                        "code": "INCOMPATIBLE_PROTOCOL",
+                        "message": "不支持的 Extension 协议版本",
+                    },
+                )
+                await websocket.close()
+                return
+
+            async with self._connection_lock:
+                if self._client is not None:
+                    await self._send_json(
+                        websocket,
+                        {
+                            "type": "error",
+                            "code": "EXTENSION_ALREADY_CONNECTED",
+                            "message": _error_message("EXTENSION_ALREADY_CONNECTED"),
+                        },
+                    )
+                    await websocket.close()
+                    return
+                self._client = websocket
+                self._client_ready.set()
+            LOGGER.info("浏览器扩展已连接")
+
+            async for raw_message in websocket:
+                await self._handle_message(self._decode_message(raw_message))
+        except (ConnectionClosed, asyncio.TimeoutError, OSError, ValueError) as exc:
+            LOGGER.debug("Extension 连接结束：%s", exc)
+        finally:
+            async with self._connection_lock:
+                if self._client is websocket:
+                    self._client = None
+                    self._client_ready.clear()
+                    self._fail_pending(
+                        _BridgeRPCError(
+                            "EXTENSION_NOT_CONNECTED",
+                            _error_message("EXTENSION_NOT_CONNECTED"),
+                        )
+                    )
+                    LOGGER.warning("浏览器扩展连接已断开")
+
+    async def _handle_message(self, message: dict[str, Any]) -> None:
+        message_type = message.get("type")
+        if message_type == "ping":
+            if self._client is not None:
+                await self._send_json(self._client, {"type": "pong"})
+            return
+        if message_type != "response":
+            return
+
+        request_id = message.get("id")
+        if not isinstance(request_id, str):
+            return
+        future = self._pending.get(request_id)
+        if future is not None and not future.done():
+            future.set_result(message)
+
+    @staticmethod
+    def _decode_message(raw_message: str | bytes) -> dict[str, Any]:
+        if isinstance(raw_message, bytes):
+            raw_message = raw_message.decode("utf-8")
+        message = json.loads(raw_message)
+        if not isinstance(message, dict):
+            raise ValueError("RPC 消息必须是 JSON 对象")
+        return message
+
+    @staticmethod
+    async def _send_json(websocket: Any, message: dict[str, Any]) -> None:
+        await websocket.send(json.dumps(message, ensure_ascii=False))
+
+    def _fail_pending(self, error: _BridgeRPCError) -> None:
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(_BridgeRPCError(error.code, error.message))
+        self._pending.clear()
+
+
+# A single localhost server is shared by multiple sessions. Each session still
+# owns a different tab_id, so closing one session doesn't close other tabs.
+_TRANSPORT_LOCK = asyncio.Lock()
+_SHARED_TRANSPORT: _BridgeTransport | None = None
+_SHARED_TRANSPORT_USERS = 0
+
+
+async def _acquire_shared_transport() -> _BridgeTransport:
+    global _SHARED_TRANSPORT, _SHARED_TRANSPORT_USERS
+    async with _TRANSPORT_LOCK:
+        if _SHARED_TRANSPORT is None:
+            _SHARED_TRANSPORT = _BridgeTransport()
+            try:
+                await _SHARED_TRANSPORT.start()
+            except Exception:
+                _SHARED_TRANSPORT = None
+                raise
+        _SHARED_TRANSPORT_USERS += 1
+        return _SHARED_TRANSPORT
+
+
+async def _release_shared_transport(transport: _BridgeTransport) -> None:
+    global _SHARED_TRANSPORT, _SHARED_TRANSPORT_USERS
+    async with _TRANSPORT_LOCK:
+        if _SHARED_TRANSPORT is not transport:
+            return
+        _SHARED_TRANSPORT_USERS = max(0, _SHARED_TRANSPORT_USERS - 1)
+        if _SHARED_TRANSPORT_USERS == 0:
+            _SHARED_TRANSPORT = None
+            await transport.close()
 
 
 # =========================
@@ -78,322 +345,137 @@ class ChatGPTBridgeError(RuntimeError):
 
 
 class ChatGPTSession:
-    """绑定一个固定 Playwright Page 的 ChatGPT 会话。"""
+    """绑定浏览器 Extension 创建的单个 ChatGPT tab。"""
 
-    def __init__(
-        self,
-        playwright: Playwright,
-        context: BrowserContext,
-        page: Page,
-    ) -> None:
-        self._playwright = playwright
-        self._context = context
-        self.page = page
+    def __init__(self, transport: _BridgeTransport, tab_id: int, current_url: str) -> None:
+        self._transport = transport
+        self._tab_id = tab_id
+        self._current_url = current_url
         self._chat_lock = asyncio.Lock()
         self._closed = False
 
     @classmethod
     async def open(cls, url: str) -> "ChatGPTSession":
-        """启动持久化浏览器并绑定指定 ChatGPT 页面。"""
-
         normalized_url = cls._validate_url(url)
-        playwright = await async_playwright().start()
-        context: BrowserContext | None = None
-
+        transport = await _acquire_shared_transport()
         try:
-            launch_kwargs: dict[str, object] = {
-                "user_data_dir": str(PROFILE_DIR),
-                "headless": HEADLESS,
-            }
-            if BROWSER_CHANNEL is not None:
-                launch_kwargs["channel"] = BROWSER_CHANNEL
-
-            context = await playwright.chromium.launch_persistent_context(**launch_kwargs)
-            context.set_default_timeout(PAGE_LOAD_TIMEOUT_MS)
-            if SESSION_METADATA_FILE.exists():
-                LOGGER.info("发现已保存的 ChatGPT 登录 Profile")
-            else:
-                LOGGER.warning(
-                    "未发现登录脚本生成的状态信息；如未登录，请先运行 chatgpt_web_login.py"
+            result = await transport.request(
+                "open",
+                {"url": normalized_url},
+                timeout_ms=EXTENSION_CONNECT_TIMEOUT_MS,
+            )
+            tab_id = result.get("tab_id")
+            if not isinstance(tab_id, int):
+                raise ChatGPTBridgeError(
+                    "Extension 未返回有效的 tabId",
+                    "INTERNAL_ERROR",
                 )
-
-            page = await cls._select_page(context)
-            session = cls(playwright, context, page)
-            LOGGER.info("打开 ChatGPT 页面")
-            try:
-                await page.goto(
-                    normalized_url,
-                    wait_until="domcontentloaded",
-                    timeout=PAGE_LOAD_TIMEOUT_MS,
-                )
-            except PlaywrightTimeoutError as exc:
-                raise ChatGPTBridgeError("ChatGPT 页面加载失败，请检查网络连接") from exc
-            except PlaywrightError as exc:
-                raise ChatGPTBridgeError("ChatGPT 页面加载失败，请检查 URL 和网络连接") from exc
-
-            await session._wait_page_ready()
-            LOGGER.info("已绑定 ChatGPT 标签页")
-            return session
+            current_url = result.get("url")
+            if not isinstance(current_url, str):
+                current_url = normalized_url
+            LOGGER.info("已绑定 ChatGPT tabId=%s", tab_id)
+            return cls(transport, tab_id, current_url)
+        except _BridgeRPCError as exc:
+            await _release_shared_transport(transport)
+            raise ChatGPTBridgeError(
+                _error_message(exc.code, exc.message),
+                exc.code,
+            ) from exc
         except ChatGPTBridgeError:
-            # 页面未能完成绑定时没有可交还给调用方的 Session，主动清理
-            # Playwright 驱动，避免进程退出时遗留子进程。若已绑定成功，
-            # chat() 超时则由调用方保留 Session 和浏览器窗口供检查。
-            if context is not None:
-                await context.close()
-            await playwright.stop()
+            await _release_shared_transport(transport)
             raise
-        except PlaywrightError as exc:
-            if context is not None:
-                await context.close()
-            await playwright.stop()
-            raise ChatGPTBridgeError("无法启动 Playwright 浏览器") from exc
         except Exception:
-            if context is not None:
-                await context.close()
-            await playwright.stop()
+            await _release_shared_transport(transport)
             raise
 
-    @staticmethod
-    async def _select_page(context: BrowserContext) -> Page:
-        """复用空白页，否则新建一个页，避免不必要的多标签页。"""
+    async def get_messages(self) -> list[dict[str, str]]:
+        self._ensure_open()
+        result = await self._request("get_messages", {"tab_id": self._tab_id})
+        messages = result.get("messages")
+        if not isinstance(messages, list):
+            raise ChatGPTBridgeError("Extension 返回了无效消息列表", "INTERNAL_ERROR")
+        for message in messages:
+            if (
+                not isinstance(message, dict)
+                or message.get("role") not in {"user", "assistant"}
+                or not isinstance(message.get("content"), str)
+            ):
+                raise ChatGPTBridgeError("Extension 返回了无效消息", "INTERNAL_ERROR")
+        self._update_url(result)
+        return messages
 
-        for page in context.pages:
-            if page.url in {"", "about:blank"} and not page.is_closed():
-                return page
-        return await context.new_page()
+    async def chat(self, text: str) -> str:
+        if not text.strip():
+            raise ChatGPTBridgeError("消息不能为空", "INPUT_FAILED")
+        async with self._chat_lock:
+            self._ensure_open()
+            result = await self._request(
+                "chat",
+                {"tab_id": self._tab_id, "text": text},
+                timeout_ms=RESPONSE_TIMEOUT_MS,
+            )
+            answer = result.get("text")
+            if not isinstance(answer, str) or not answer.strip():
+                raise ChatGPTBridgeError("Extension 返回了空回复", "INTERNAL_ERROR")
+            self._update_url(result)
+            LOGGER.info("ChatGPT 回复生成完成，tabId=%s", self._tab_id)
+            return answer
+
+    async def __aenter__(self) -> "ChatGPTSession":
+        self._ensure_open()
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self._shutdown()
+
+    async def _request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout_ms: int = RPC_TIMEOUT_MS,
+    ) -> dict[str, Any]:
+        try:
+            return await self._transport.request(method, params, timeout_ms)
+        except _BridgeRPCError as exc:
+            code = exc.code
+            if method == "chat" and code == "RPC_TIMEOUT":
+                code = "RESPONSE_TIMEOUT"
+            raise ChatGPTBridgeError(_error_message(code, exc.message), code) from exc
+
+    def _update_url(self, result: dict[str, Any]) -> None:
+        current_url = result.get("url")
+        if isinstance(current_url, str) and current_url:
+            self._current_url = current_url
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise ChatGPTBridgeError("当前 ChatGPT Session 已关闭", "INTERNAL_ERROR")
 
     @staticmethod
     def _validate_url(url: str) -> str:
         normalized_url = url.strip()
         parsed = urlparse(normalized_url)
         if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
-            raise ValueError("仅支持 https://chatgpt.com 或 https://www.chatgpt.com")
+            raise ChatGPTBridgeError(
+                _error_message("INVALID_URL"),
+                "INVALID_URL",
+            )
         return normalized_url
-
-    async def get_messages(self) -> list[dict[str, str]]:
-        """读取当前 DOM 中已经加载的用户和 Assistant 消息。"""
-
-        self._ensure_page_open()
-        nodes = self.page.locator(MESSAGE_SELECTOR)
-        messages: list[dict[str, str]] = []
-        try:
-            count = await nodes.count()
-            for index in range(count):
-                node = nodes.nth(index)
-                role = await node.get_attribute("data-message-author-role")
-                if role not in {"user", "assistant"}:
-                    continue
-                content = (await node.inner_text()).strip()
-                if content:
-                    messages.append({"role": role, "content": content})
-        except PlaywrightError as exc:
-            raise ChatGPTBridgeError(
-                "读取 ChatGPT 消息失败，可能由于页面结构发生变化"
-            ) from exc
-        return messages
-
-    async def chat(self, text: str) -> str:
-        """发送一条文本消息，并返回最后一条完整 Assistant 回复。"""
-
-        if not text.strip():
-            raise ValueError("消息不能为空")
-
-        async with self._chat_lock:
-            self._ensure_page_open()
-            before_count = await self._assistant_count()
-            LOGGER.info("正在发送消息")
-            await self._send_text(text)
-            await self._wait_for_new_assistant(before_count)
-            await self._wait_for_response_complete()
-            answer = await self._get_last_assistant_text()
-            LOGGER.info("ChatGPT 回复生成完成")
-            return answer
-
-    async def __aenter__(self) -> "ChatGPTSession":
-        self._ensure_page_open()
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        await self._shutdown()
-
-    def _ensure_page_open(self) -> None:
-        if self._closed or self.page.is_closed():
-            raise ChatGPTBridgeError("当前 ChatGPT 标签页已关闭")
-
-    async def _wait_page_ready(self) -> None:
-        """等待输入框出现，也给首次手动登录留下可见操作时间。"""
-
-        self._ensure_page_open()
-        prompt = self.page.locator(",".join(PROMPT_SELECTORS)).first
-        try:
-            await prompt.wait_for(state="visible", timeout=PAGE_LOAD_TIMEOUT_MS)
-        except PlaywrightTimeoutError as exc:
-            raise ChatGPTBridgeError(
-                "未找到 ChatGPT 输入框，可能尚未登录、网络异常或页面结构发生变化"
-            ) from exc
-
-    async def _get_prompt_locator(self) -> Locator:
-        self._ensure_page_open()
-        for selector in PROMPT_SELECTORS:
-            locator = self.page.locator(selector).first
-            try:
-                if await locator.is_visible():
-                    return locator
-            except PlaywrightError:
-                continue
-        raise ChatGPTBridgeError(
-            "未找到 ChatGPT 输入框，可能尚未登录或页面结构发生变化"
-        )
-
-    async def _get_send_button(self) -> Locator | None:
-        self._ensure_page_open()
-        for selector in SEND_BUTTON_SELECTORS:
-            locator = self.page.locator(selector).first
-            try:
-                if await locator.is_visible():
-                    return locator
-            except PlaywrightError:
-                continue
-        return None
-
-    async def _assistant_count(self) -> int:
-        self._ensure_page_open()
-        try:
-            return await self.page.locator(ASSISTANT_SELECTOR).count()
-        except PlaywrightError as exc:
-            raise ChatGPTBridgeError(
-                "读取 Assistant 消息失败，可能由于页面结构发生变化"
-            ) from exc
-
-    async def _send_text(self, text: str) -> None:
-        prompt = await self._get_prompt_locator()
-        try:
-            await prompt.click()
-            try:
-                await prompt.fill(text)
-            except PlaywrightError:
-                await prompt.click()
-                await self.page.keyboard.insert_text(text)
-
-            current_text = await self._read_prompt_text(prompt)
-            if self._normalize_text(current_text) != self._normalize_text(text):
-                await prompt.click()
-                await self.page.keyboard.press("Control+A")
-                await self.page.keyboard.insert_text(text)
-                current_text = await self._read_prompt_text(prompt)
-
-            if self._normalize_text(current_text) != self._normalize_text(text):
-                raise ChatGPTBridgeError("文本未成功写入 ChatGPT 输入框")
-
-            button = await self._get_send_button()
-            if button is not None:
-                if not await button.is_enabled():
-                    raise ChatGPTBridgeError("ChatGPT 发送按钮当前不可用")
-                await button.click()
-            else:
-                # 只有确认焦点仍在输入框且文本已验证时，才使用 Enter 发送。
-                await prompt.click()
-                await self.page.keyboard.press("Enter")
-        except ChatGPTBridgeError:
-            raise
-        except PlaywrightError as exc:
-            raise ChatGPTBridgeError(
-                "发送消息失败，可能由于 ChatGPT 页面结构发生变化"
-            ) from exc
-
-    async def _read_prompt_text(self, prompt: Locator) -> str:
-        try:
-            return await prompt.input_value()
-        except PlaywrightError:
-            try:
-                return await prompt.inner_text()
-            except PlaywrightError as exc:
-                raise ChatGPTBridgeError("无法读取 ChatGPT 输入框内容") from exc
-
-    async def _wait_for_new_assistant(self, old_count: int) -> None:
-        deadline = time.monotonic() + RESPONSE_TIMEOUT_MS / 1000
-        while time.monotonic() < deadline:
-            if await self._assistant_count() > old_count:
-                LOGGER.info("已检测到新的 Assistant 消息")
-                return
-            await asyncio.sleep(POLL_INTERVAL_MS / 1000)
-        raise ChatGPTBridgeError("等待 ChatGPT 回复超时")
-
-    async def _is_generating(self) -> bool:
-        self._ensure_page_open()
-        for selector in STOP_BUTTON_SELECTORS:
-            locator = self.page.locator(selector).first
-            try:
-                if await locator.is_visible():
-                    return True
-            except PlaywrightError:
-                continue
-        return False
-
-    async def _get_last_assistant_locator(self) -> Locator:
-        count = await self._assistant_count()
-        if count == 0:
-            raise ChatGPTBridgeError("未找到 Assistant 回复")
-        return self.page.locator(ASSISTANT_SELECTOR).nth(count - 1)
-
-    async def _get_last_assistant_text(self) -> str:
-        assistant = await self._get_last_assistant_locator()
-        try:
-            content = (await assistant.inner_text()).strip()
-        except PlaywrightError as exc:
-            raise ChatGPTBridgeError(
-                "读取 Assistant 回复失败，可能由于页面结构发生变化"
-            ) from exc
-        if not content:
-            raise ChatGPTBridgeError("未读取到 Assistant 回复")
-        return content
-
-    async def _wait_for_response_complete(self) -> None:
-        deadline = time.monotonic() + RESPONSE_TIMEOUT_MS / 1000
-        last_text: str | None = None
-        stable_since: float | None = None
-
-        while time.monotonic() < deadline:
-            assistant = await self._get_last_assistant_locator()
-            try:
-                current_text = (await assistant.inner_text()).strip()
-            except PlaywrightError as exc:
-                raise ChatGPTBridgeError(
-                    "等待 Assistant 回复失败，可能由于页面结构发生变化"
-                ) from exc
-
-            now = time.monotonic()
-            if current_text != last_text:
-                last_text = current_text
-                stable_since = now if current_text else None
-            elif current_text and stable_since is not None:
-                stable_for_ms = (now - stable_since) * 1000
-                if stable_for_ms >= STABLE_TIME_MS and not await self._is_generating():
-                    return
-
-            await asyncio.sleep(POLL_INTERVAL_MS / 1000)
-
-        raise ChatGPTBridgeError("等待 ChatGPT 回复超时")
-
-    @staticmethod
-    def _normalize_text(value: str) -> str:
-        return " ".join(value.split())
 
     async def _shutdown(self) -> None:
         if self._closed:
             return
         self._closed = True
-        try:
-            await self._context.close()
-        except PlaywrightError as exc:
-            LOGGER.warning("关闭 ChatGPT 浏览器上下文失败：%s", exc)
-        finally:
-            await self._playwright.stop()
+        await _release_shared_transport(self._transport)
 
 
 # =========================
-# CLI test program
+# CLI
 # =========================
+
+
+async def _ainput(prompt: str) -> str:
+    return await asyncio.to_thread(input, prompt)
 
 
 def _print_history(messages: list[dict[str, str]]) -> None:
@@ -404,23 +486,23 @@ def _print_history(messages: list[dict[str, str]]) -> None:
 
 
 async def main() -> None:
-    url = input("请输入 ChatGPT URL：\n> ").strip()
-    if not url:
-        print("错误：URL 不能为空")
-        return
-
     session: ChatGPTSession | None = None
     try:
-        print("正在打开 ChatGPT...")
+        url = (await _ainput("请输入 ChatGPT URL：\n> ")).strip()
+        if not url:
+            raise ChatGPTBridgeError("URL 不能为空", "INVALID_URL")
+
+        print("正在启动 localhost Bridge 并等待浏览器扩展...")
         session = await ChatGPTSession.open(url)
         messages = await session.get_messages()
-        print("ChatGPT 页面已绑定。")
-        print(f"当前 URL: {session.page.url}")
+        print("ChatGPT 标签页已绑定。")
+        print(f"当前 URL: {session._current_url}")
         print(f"已读取 {len(messages)} 条消息。")
+        print("提示：如需连接或重连扩展，请点击浏览器工具栏中的扩展图标。")
 
         while True:
             try:
-                command = input("你 > ").strip()
+                command = (await _ainput("你 > ")).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
@@ -428,7 +510,11 @@ async def main() -> None:
             if command in {"/exit", "/quit"}:
                 break
             if command == "/history":
-                _print_history(await session.get_messages())
+                try:
+                    _print_history(await session.get_messages())
+                except ChatGPTBridgeError as exc:
+                    LOGGER.error("%s", exc)
+                    print(f"错误：{exc}")
                 continue
             if not command:
                 continue
@@ -436,12 +522,13 @@ async def main() -> None:
             try:
                 answer = await session.chat(command)
                 print(f"ChatGPT > {answer}")
-            except (ChatGPTBridgeError, ValueError) as exc:
+            except ChatGPTBridgeError as exc:
                 LOGGER.error("%s", exc)
                 print(f"错误：{exc}")
-    except (ChatGPTBridgeError, ValueError) as exc:
-        LOGGER.error("%s", exc)
-        print(f"错误：{exc}")
+    except (ChatGPTBridgeError, EOFError, KeyboardInterrupt) as exc:
+        if isinstance(exc, ChatGPTBridgeError):
+            LOGGER.error("%s", exc)
+            print(f"错误：{exc}")
     finally:
         if session is not None:
             await session._shutdown()

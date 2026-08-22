@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Web Bridge",
+  "version": "0.2.0",
+  "description": "通过 localhost WebSocket 将 ChatGPT Web DOM 提供给本地 Bridge。",
+  "minimum_chrome_version": "116",
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "action": {
+    "default_title": "连接 ChatGPT Web Bridge"
+  },
+  "permissions": [
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://www.chatgpt.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://www.chatgpt.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
