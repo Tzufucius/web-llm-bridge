@@ -181,20 +181,8 @@ function isGenerating() {
   return Boolean(findVisible(STOP_BUTTON_SELECTORS));
 }
 
-function assistantCount() {
-  return document.querySelectorAll(ASSISTANT_SELECTOR).length;
-}
-
 function userCount() {
   return document.querySelectorAll(USER_SELECTOR).length;
-}
-
-function getLastAssistant() {
-  const nodes = document.querySelectorAll(ASSISTANT_SELECTOR);
-  if (nodes.length === 0) {
-    throw new ContentBridgeError("RESPONSE_NOT_FOUND", "未找到 Assistant 回复");
-  }
-  return nodes[nodes.length - 1];
 }
 
 function findLastAssistant() {
@@ -707,6 +695,7 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
   let stableSince = null;
   let lastProgressAt = startedAt;
   let lastPhase = "thinking";
+  let observedActivity = false;
 
   sendChatProgress(requestId, "thinking", startedAt, lastActivityAt);
 
@@ -719,6 +708,7 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
     if (revisionChanged || currentText !== lastText) {
       lastActivityAt = now;
       lastRevision = responseActivityRevision;
+      observedActivity = true;
     }
 
     const assistantChanged = assistant !== lastAssistantNode;
@@ -732,7 +722,7 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
 
     const phase = currentText
       ? "streaming"
-      : revisionChanged
+      : observedActivity && now - lastActivityAt <= PROGRESS_INTERVAL_MS
         ? "working"
         : "thinking";
     if (
@@ -748,6 +738,7 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
       currentText &&
       stableSince !== null &&
       now - stableSince >= STABLE_TIME_MS &&
+      now - lastActivityAt >= STABLE_TIME_MS &&
       !isGenerating()
     ) {
       const finalAssistant = findLastAssistant();
