@@ -6,7 +6,6 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import importlib.metadata
-from importlib.resources.abc import Traversable
 from importlib import resources
 import json
 import os
@@ -15,6 +14,11 @@ import shutil
 import sys
 import tempfile
 from typing import Iterable
+
+try:
+    from importlib.resources.abc import Traversable
+except ModuleNotFoundError:  # Python 3.9 exposes it from importlib.abc.
+    from importlib.abc import Traversable
 
 
 SKILL_NAME = "web-llm-bridge"
@@ -197,7 +201,7 @@ def _copy_bundle(bundle: SkillBundle, destination: Path) -> None:
         file = destination / Path(relative)
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(data)
-    (destination / MANIFEST_NAME).write_text(_manifest(bundle), encoding="utf-8", newline="\n")
+    (destination / MANIFEST_NAME).write_bytes(_manifest(bundle).encode("utf-8"))
 
 
 def _replace_target(path: Path, bundle: SkillBundle) -> None:
