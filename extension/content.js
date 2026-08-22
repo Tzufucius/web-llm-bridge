@@ -864,7 +864,7 @@ async function waitForUserSubmitted(
   startedAt,
 ) {
   const deadline = performance.now() + SUBMISSION_CONFIRMATION_TIMEOUT_MS;
-  const initialRevision = responseActivityRevision;
+  let lastRevision = responseActivityRevision;
   let lastProgressAt = startedAt;
   let lastActivityAt = startedAt;
   sendChatProgress(requestId, "working", startedAt, lastActivityAt);
@@ -885,7 +885,8 @@ async function waitForUserSubmitted(
       return;
     }
     const now = performance.now();
-    if (responseActivityRevision !== initialRevision) {
+    if (responseActivityRevision !== lastRevision) {
+      lastRevision = responseActivityRevision;
       lastActivityAt = now;
     }
     if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
