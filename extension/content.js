@@ -51,6 +51,7 @@ const STATUS_ACTIVITY_SELECTORS = [
   '[data-testid*="status"]',
   '[data-testid*="progress"]',
   '[data-testid*="loading"]',
+  '[data-testid*="response"]',
   '[data-status]',
 ];
 const RESPONSE_ACTIVITY_SELECTORS = [
@@ -65,7 +66,7 @@ const RESPONSE_SNAPSHOT_SELECTORS = [
   ...STATUS_ACTIVITY_SELECTORS,
 ];
 const TOOL_ACTIVITY_TEXT_PATTERN =
-  /(tool|function|browser|search|code|调用工具|工具调用|搜索|浏览|代码执行|正在思考|思考中|分析中)/i;
+  /(tool|function|browser|search|code|reasoning|analysis|analyzing|executing|running|working|loading|调用工具|工具调用|搜索|浏览|代码执行|正在思考|思考中|分析中|工作中|运行中|加载中)/i;
 
 class ContentBridgeError extends Error {
   constructor(code, message) {
@@ -682,7 +683,11 @@ function isResponseActivityMutation(record) {
 
 function getActivityNodeText(node) {
   const text = node?.innerText || node?.textContent || "";
-  return normalizeText(text).slice(0, 1_000);
+  const normalized = normalizeText(text);
+  if (normalized.length <= 1_000) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 500)}...${normalized.slice(-500)}(${normalized.length})`;
 }
 
 function getActivityNodeSignature(node) {
