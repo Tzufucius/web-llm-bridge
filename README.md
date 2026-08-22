@@ -71,6 +71,29 @@ Broker 未启动时会自动重连。扩展最低要求 Chrome/Edge 120。
 
 ## 启动与使用
 
+### Windows 一键进入交互终端
+
+在仓库根目录执行：
+
+```powershell
+.\start.ps1
+```
+
+脚本会检查 Python 和依赖，启动或复用本机 Broker，然后直接进入人机交互 CLI。首次
+使用且尚未安装依赖时，执行 `.\start.ps1 -Setup`；该选项会以 editable 模式安装
+当前项目。其他维护入口如下：
+
+```powershell
+.\start.ps1 -CheckOnly   # 检查解释器、Broker 和 Extension 路径
+.\start.ps1 -BrokerOnly  # 仅启动 Broker，不进入交互终端
+.\start.ps1 -StopBroker  # 停止由脚本启动并记录的 Broker
+```
+
+浏览器扩展仍需由用户在 Chrome/Edge 中加载并完成登录；启动脚本不会读取认证信息，
+也不会自动操作浏览器。
+
+### 分步启动
+
 先启动唯一持有 Extension WebSocket 的 Broker：
 
 ```powershell
