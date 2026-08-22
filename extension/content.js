@@ -893,6 +893,8 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
     const assistantChanged = assistant !== lastAssistantNode;
     if (assistantChanged) {
       lastAssistantNode = assistant;
+      completionCandidateSince = null;
+      completionSerializedText = null;
     }
     if (currentText !== lastText || assistantChanged) {
       lastText = currentText;
