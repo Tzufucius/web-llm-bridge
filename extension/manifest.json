@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Web Bridge",
-  "version": "0.2.0",
-  "description": "通过 localhost WebSocket 将 ChatGPT Web DOM 提供给本地 Bridge。",
+  "name": "Web LLM Bridge",
+  "version": "0.1.0",
+  "description": "通过本地 WebSocket 将已注册网页模型 Provider 的页面能力提供给本地 Bridge。",
   "minimum_chrome_version": "120",
   "background": {
     "service_worker": "service_worker.js"
   },
   "action": {
-    "default_title": "连接 ChatGPT Web Bridge"
+    "default_title": "连接 Web LLM Bridge"
   },
   "permissions": [
     "alarms"
@@ -24,6 +24,14 @@
         "https://www.chatgpt.com/*"
       ],
       "js": [
+        "core/utils.js",
+        "core/registry.js",
+        "core/markdown.js",
+        "core/history.js",
+        "core/content_runtime.js",
+        "providers/chatgpt/profile.js",
+        "providers/chatgpt/serializer.js",
+        "providers/chatgpt/adapter.js",
         "content.js"
       ],
       "run_at": "document_idle"
