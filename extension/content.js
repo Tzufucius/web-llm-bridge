@@ -666,6 +666,22 @@ function isResponseActivityNode(node) {
   });
 }
 
+function isResponseActivitySubtree(node) {
+  if (isResponseActivityNode(node)) {
+    return true;
+  }
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+    return false;
+  }
+  return RESPONSE_ACTIVITY_SELECTORS.some((selector) => {
+    try {
+      return Boolean(node.querySelector(selector));
+    } catch (_error) {
+      return false;
+    }
+  });
+}
+
 function isResponseActivityMutation(record) {
   const candidates = [record.target];
   for (const node of record.addedNodes || []) {
@@ -677,7 +693,7 @@ function isResponseActivityMutation(record) {
   return candidates.some((node) => {
     const element =
       node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-    return isResponseActivityNode(element);
+    return isResponseActivitySubtree(element);
   });
 }
 
