@@ -15,7 +15,8 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Final
+import time
+from typing import Any, Callable, Final
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -38,12 +39,19 @@ BRIDGE_PORT: Final[int] = 8765
 PROTOCOL_VERSION: Final[int] = 1
 EXTENSION_CONNECT_TIMEOUT_MS: Final[int] = 30_000
 RPC_TIMEOUT_MS: Final[int] = 30_000
-RESPONSE_TIMEOUT_MS: Final[int] = 180_000
+RESPONSE_IDLE_TIMEOUT_MS: Final[int] = 300_000
+RESPONSE_TIMEOUT_MS: Final[int] = RESPONSE_IDLE_TIMEOUT_MS
 HISTORY_RPC_TIMEOUT_MS: Final[int] = 70_000
 MAX_WS_MESSAGE_SIZE: Final[int] = 8 * 1024 * 1024
 MIN_WEBSOCKETS_VERSION: Final[tuple[int, int]] = (14, 0)
 DEFAULT_HISTORY_LIMIT: Final[int] = 5
 MAX_HISTORY_LIMIT: Final[int] = 1_000
+PROGRESS_PHASES: Final[set[str]] = {
+    "submitted",
+    "thinking",
+    "working",
+    "streaming",
+}
 ALLOWED_HOSTS: Final[set[str]] = {"chatgpt.com", "www.chatgpt.com"}
 ALLOWED_EXTENSION_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^chrome-extension://[a-p]{32}$"
@@ -71,7 +79,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "SEND_FAILED": "消息点击发送后未确认提交成功",
     "SEND_BUTTON_NOT_FOUND": "未找到可靠的 ChatGPT 发送按钮",
     "BUSY": "ChatGPT 当前仍在生成回复",
-    "RESPONSE_TIMEOUT": "等待 ChatGPT 回复超时",
+    "RESPONSE_TIMEOUT": "连续 5 分钟未检测到页面更新，等待 ChatGPT 回复超时",
     "DOM_CHANGED": "ChatGPT 页面结构可能已经发生变化",
     "INTERNAL_ERROR": "ChatGPT Web Bridge 内部错误",
     "RPC_TIMEOUT": "等待浏览器扩展响应超时",
@@ -131,6 +139,8 @@ class _BridgeTransport:
         self._send_lock = asyncio.Lock()
         self._client_ready = asyncio.Event()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
+        self._progress_callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._progress_events: dict[str, asyncio.Event] = {}
         self._closed = False
 
     async def start(self) -> None:
@@ -174,11 +184,20 @@ class _BridgeTransport:
         method: str,
         params: dict[str, Any],
         timeout_ms: int = RPC_TIMEOUT_MS,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        reset_timeout_on_progress: bool = False,
     ) -> dict[str, Any]:
         await self.wait_extension()
         request_id = str(uuid4())
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
+        progress_event = (
+            asyncio.Event() if reset_timeout_on_progress else None
+        )
+        if progress_callback is not None:
+            self._progress_callbacks[request_id] = progress_callback
+        if progress_event is not None:
+            self._progress_events[request_id] = progress_event
         request = {
             "type": "request",
             "id": request_id,
@@ -196,10 +215,17 @@ class _BridgeTransport:
                     )
                 await client.send(json.dumps(request, ensure_ascii=False))
 
-            response = await asyncio.wait_for(
-                asyncio.shield(future),
-                timeout=timeout_ms / 1000,
-            )
+            if progress_event is None:
+                response = await asyncio.wait_for(
+                    asyncio.shield(future),
+                    timeout=timeout_ms / 1000,
+                )
+            else:
+                response = await self._wait_for_response_with_progress(
+                    future,
+                    progress_event,
+                    timeout_ms,
+                )
         except asyncio.TimeoutError as exc:
             raise _BridgeRPCError("RPC_TIMEOUT", _error_message("RPC_TIMEOUT")) from exc
         except _BridgeRPCError:
@@ -211,6 +237,8 @@ class _BridgeTransport:
             ) from exc
         finally:
             self._pending.pop(request_id, None)
+            self._progress_callbacks.pop(request_id, None)
+            self._progress_events.pop(request_id, None)
             if not future.done():
                 future.cancel()
 
@@ -228,6 +256,36 @@ class _BridgeTransport:
         if not isinstance(result, dict):
             raise _BridgeRPCError("INTERNAL_ERROR", "Extension 返回了无效结果")
         return result
+
+    async def _wait_for_response_with_progress(
+        self,
+        future: asyncio.Future[dict[str, Any]],
+        progress_event: asyncio.Event,
+        timeout_ms: int,
+    ) -> dict[str, Any]:
+        """Wait for the response while resetting the idle timeout on progress."""
+        loop = asyncio.get_running_loop()
+        idle_deadline = loop.time() + timeout_ms / 1000
+        while True:
+            remaining = idle_deadline - loop.time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError
+            progress_wait = asyncio.create_task(progress_event.wait())
+            done, _ = await asyncio.wait(
+                {future, progress_wait},
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if future in done:
+                progress_wait.cancel()
+                await asyncio.gather(progress_wait, return_exceptions=True)
+                return future.result()
+            if progress_wait not in done:
+                progress_wait.cancel()
+                await asyncio.gather(progress_wait, return_exceptions=True)
+                raise asyncio.TimeoutError
+            progress_event.clear()
+            idle_deadline = loop.time() + timeout_ms / 1000
 
     async def close(self) -> None:
         if self._closed:
@@ -318,6 +376,23 @@ class _BridgeTransport:
             if self._client is not None:
                 await self._send_json(self._client, {"type": "pong"})
             return
+        if message_type == "progress":
+            request_id = message.get("id")
+            if (
+                not isinstance(request_id, str)
+                or message.get("phase") not in PROGRESS_PHASES
+            ):
+                return
+            progress_event = self._progress_events.get(request_id)
+            if progress_event is not None:
+                progress_event.set()
+            callback = self._progress_callbacks.get(request_id)
+            if callback is not None:
+                try:
+                    callback(message)
+                except Exception:
+                    LOGGER.debug("处理 ChatGPT 进度回调失败", exc_info=True)
+            return
         if message_type != "response":
             return
 
@@ -346,6 +421,10 @@ class _BridgeTransport:
             if not future.done():
                 future.set_exception(_BridgeRPCError(error.code, error.message))
         self._pending.clear()
+        self._progress_callbacks.clear()
+        for progress_event in self._progress_events.values():
+            progress_event.set()
+        self._progress_events.clear()
 
 
 # A single localhost server is shared by multiple sessions. Each session still
@@ -401,6 +480,7 @@ class ChatGPTSession:
         self._reopen_on_closed = reopen_on_closed
         self._last_history_truncated = False
         self._chat_lock = asyncio.Lock()
+        self._progress_callback: Callable[[dict[str, Any]], None] | None = None
         self._closed = False
 
     @classmethod
@@ -495,7 +575,9 @@ class ChatGPTSession:
                 result = await self._request(
                     "chat",
                     {"tab_id": self._tab_id, "text": text},
-                    timeout_ms=RESPONSE_TIMEOUT_MS,
+                    timeout_ms=RESPONSE_IDLE_TIMEOUT_MS,
+                    progress_callback=self._progress_callback,
+                    reset_timeout_on_progress=True,
                 )
             except ChatGPTBridgeError as exc:
                 if exc.code == "TAB_CLOSED" and self._reopen_on_closed:
@@ -522,14 +604,31 @@ class ChatGPTSession:
         method: str,
         params: dict[str, Any],
         timeout_ms: int = RPC_TIMEOUT_MS,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        reset_timeout_on_progress: bool = False,
     ) -> dict[str, Any]:
         try:
-            return await self._transport.request(method, params, timeout_ms)
+            request_options: dict[str, Any] = {"timeout_ms": timeout_ms}
+            if progress_callback is not None:
+                request_options["progress_callback"] = progress_callback
+            if reset_timeout_on_progress:
+                request_options["reset_timeout_on_progress"] = True
+            return await self._transport.request(
+                method,
+                params,
+                **request_options,
+            )
         except _BridgeRPCError as exc:
             code = exc.code
             if method == "chat" and code == "RPC_TIMEOUT":
                 code = "RESPONSE_TIMEOUT"
             raise ChatGPTBridgeError(_error_message(code, exc.message), code) from exc
+
+    def _set_progress_callback(
+        self,
+        callback: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        self._progress_callback = callback
 
     async def _reopen_current_tab(self) -> None:
         self._ensure_open()
@@ -587,6 +686,7 @@ class ChatGPTSession:
         if self._closed:
             return
         self._closed = True
+        self._progress_callback = None
         await _release_shared_transport(self._transport)
 
 
@@ -597,6 +697,49 @@ class ChatGPTSession:
 
 async def _ainput(prompt: str) -> str:
     return await asyncio.to_thread(input, prompt)
+
+
+class _CliProgressRenderer:
+    """将 ChatGPT 进度事件节流到终端单行。"""
+
+    _PHASE_MESSAGES: Final[dict[str, str]] = {
+        "submitted": "ChatGPT 已提交，正在思考",
+        "thinking": "ChatGPT 正在思考",
+        "working": "ChatGPT 正在工作",
+        "streaming": "ChatGPT 正在生成回复",
+    }
+
+    def __init__(self, interval_seconds: float = 1.5) -> None:
+        self._interval_seconds = interval_seconds
+        self._last_render_at = 0.0
+        self._last_phase: str | None = None
+        self._active = False
+
+    def __call__(self, event: dict[str, Any]) -> None:
+        phase = str(event.get("phase", "working"))
+        now = time.monotonic()
+        if (
+            self._active
+            and phase == self._last_phase
+            and now - self._last_render_at < self._interval_seconds
+        ):
+            return
+        elapsed_seconds = max(0, int(event.get("elapsed_ms", 0) / 1000))
+        idle_seconds = max(0, int(event.get("idle_ms", 0) / 1000))
+        message = self._PHASE_MESSAGES.get(phase, "ChatGPT 正在工作")
+        if phase in {"thinking", "working"}:
+            message = f"{message}（已等待 {elapsed_seconds} 秒，最近活动 {idle_seconds} 秒前）"
+        print(f"\r{message}...", end="", flush=True)
+        self._last_render_at = now
+        self._last_phase = phase
+        self._active = True
+
+    def clear(self) -> None:
+        if not self._active:
+            return
+        print("\r" + " " * 120 + "\r", end="", flush=True)
+        self._active = False
+        self._last_phase = None
 
 
 def _is_home_url(url: str) -> bool:
@@ -712,6 +855,7 @@ def _print_history(messages: list[dict[str, str]]) -> None:
 
 async def main() -> None:
     session: ChatGPTSession | None = None
+    progress_renderer: _CliProgressRenderer | None = None
     try:
         open_existing = await _prompt_start_mode()
         load_history = False
@@ -734,6 +878,8 @@ async def main() -> None:
 
         print("正在启动 localhost Bridge 并等待浏览器扩展...")
         session = await ChatGPTSession.open(url)
+        progress_renderer = _CliProgressRenderer()
+        session._set_progress_callback(progress_renderer)
         print("ChatGPT 标签页已绑定。")
         print(f"当前 URL: {session._current_url}")
         if load_history:
@@ -778,8 +924,9 @@ async def main() -> None:
 
             try:
                 answer = await session.chat(command)
-                print(f"ChatGPT > {answer}")
             except ChatGPTBridgeError as exc:
+                if progress_renderer is not None:
+                    progress_renderer.clear()
                 LOGGER.error("%s", exc)
                 print(f"错误：{exc}")
                 if exc.code == "TAB_CLOSED":
@@ -788,11 +935,17 @@ async def main() -> None:
                     except ChatGPTBridgeError as reopen_error:
                         LOGGER.error("%s", reopen_error)
                         print(f"错误：{reopen_error}")
+            else:
+                if progress_renderer is not None:
+                    progress_renderer.clear()
+                print(f"ChatGPT > {answer}")
     except (ChatGPTBridgeError, EOFError, KeyboardInterrupt) as exc:
         if isinstance(exc, ChatGPTBridgeError):
             LOGGER.error("%s", exc)
             print(f"错误：{exc}")
     finally:
+        if progress_renderer is not None:
+            progress_renderer.clear()
         if session is not None:
             await session._shutdown()
 

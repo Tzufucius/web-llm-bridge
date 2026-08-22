@@ -16,7 +16,8 @@ const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
 const USER_SELECTOR = '[data-message-author-role="user"]';
 const STABLE_TIME_MS = 1_500;
 const POLL_INTERVAL_MS = 200;
-const RESPONSE_TIMEOUT_MS = 180_000;
+const RESPONSE_IDLE_TIMEOUT_MS = 300_000;
+const PROGRESS_INTERVAL_MS = 1_500;
 const BUTTON_READY_TIMEOUT_MS = 5_000;
 const SUBMIT_TIMEOUT_MS = 10_000;
 const HISTORY_LOAD_TIMEOUT_MS = 60_000;
@@ -196,6 +197,11 @@ function getLastAssistant() {
   return nodes[nodes.length - 1];
 }
 
+function findLastAssistant() {
+  const nodes = document.querySelectorAll(ASSISTANT_SELECTOR);
+  return nodes.length > 0 ? nodes[nodes.length - 1] : null;
+}
+
 async function sleep(milliseconds) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -365,6 +371,7 @@ let historyLoadPromise = null;
 let historyCollectionActive = false;
 let observerCaptureScheduled = false;
 let cachedConversationLocation = null;
+let responseActivityRevision = 0;
 
 function getConversationLocation() {
   return `${window.location.origin}${window.location.pathname}`;
@@ -599,15 +606,48 @@ function scheduleVisibleCapture() {
   }, 100);
 }
 
+const RESPONSE_ACTIVITY_ANCESTORS = [
+  "main",
+  '[role="main"]',
+  MESSAGE_SELECTOR,
+  "[aria-live]",
+  '[data-testid*="thinking"]',
+  '[data-testid*="status"]',
+  '[data-testid*="response"]',
+];
+
+function isResponseActivityMutation(record) {
+  const target =
+    record.target?.nodeType === Node.ELEMENT_NODE
+      ? record.target
+      : record.target?.parentElement;
+  if (!target) {
+    return false;
+  }
+  return RESPONSE_ACTIVITY_ANCESTORS.some((selector) => {
+    try {
+      return Boolean(target.closest(selector));
+    } catch (_error) {
+      return false;
+    }
+  });
+}
+
 function startTurnObserver() {
   if (!document.body) {
     return;
   }
-  const observer = new MutationObserver(scheduleVisibleCapture);
+  const observer = new MutationObserver((records) => {
+    if (records.some(isResponseActivityMutation)) {
+      responseActivityRevision += 1;
+    }
+    scheduleVisibleCapture();
+  });
   observer.observe(document.body, {
     subtree: true,
     childList: true,
     characterData: true,
+    attributes: true,
   });
 }
 
@@ -639,61 +679,109 @@ async function waitForUserSubmitted(oldCount) {
   );
 }
 
-async function waitForNewAssistant(oldCount) {
-  const deadline = performance.now() + RESPONSE_TIMEOUT_MS;
-  while (performance.now() < deadline) {
-    if (assistantCount() > oldCount) {
-      return;
-    }
-    await sleep(POLL_INTERVAL_MS);
+function sendChatProgress(requestId, phase, startedAt, lastActivityAt) {
+  if (typeof requestId !== "string" || !requestId) {
+    return;
   }
-  throw new ContentBridgeError("RESPONSE_TIMEOUT", "等待新的 Assistant 消息超时");
+  const now = performance.now();
+  const message = {
+    type: "chat_progress",
+    request_id: requestId,
+    phase,
+    elapsed_ms: Math.max(0, Math.round(now - startedAt)),
+    idle_ms: Math.max(0, Math.round(now - lastActivityAt)),
+  };
+  try {
+    const pending = chrome.runtime.sendMessage(message);
+    pending?.catch?.(() => {});
+  } catch (_error) {
+    // Progress is best effort and must never interrupt the Chat RPC.
+  }
 }
 
-async function waitForResponseComplete() {
-  const deadline = performance.now() + RESPONSE_TIMEOUT_MS;
-  let lastText = null;
+async function waitForResponseComplete(requestId, baselineAssistant, startedAt) {
+  let lastActivityAt = startedAt;
+  let lastRevision = responseActivityRevision;
+  let lastText = (baselineAssistant?.innerText || "").trim() || null;
+  let lastAssistantNode = baselineAssistant;
   let stableSince = null;
+  let lastProgressAt = startedAt;
+  let lastPhase = "thinking";
 
-  while (performance.now() < deadline) {
-    let currentText;
-    try {
-      currentText = (getLastAssistant().innerText || "").trim();
-    } catch (error) {
-      if (error instanceof ContentBridgeError) {
-        throw error;
-      }
-      throw new ContentBridgeError("DOM_CHANGED", "读取 Assistant 回复时页面结构发生变化");
+  sendChatProgress(requestId, "thinking", startedAt, lastActivityAt);
+
+  while (true) {
+    const now = performance.now();
+    const assistant = findLastAssistant();
+    const currentText = (assistant?.innerText || "").trim();
+    const revisionChanged = responseActivityRevision !== lastRevision;
+
+    if (revisionChanged || currentText !== lastText) {
+      lastActivityAt = now;
+      lastRevision = responseActivityRevision;
     }
 
-    const now = performance.now();
-    if (currentText !== lastText) {
+    const assistantChanged = assistant !== lastAssistantNode;
+    if (assistantChanged) {
+      lastAssistantNode = assistant;
+    }
+    if (currentText !== lastText || assistantChanged) {
       lastText = currentText;
       stableSince = currentText ? now : null;
-    } else if (
+    }
+
+    const phase = currentText
+      ? "streaming"
+      : revisionChanged
+        ? "working"
+        : "thinking";
+    if (
+      phase !== lastPhase ||
+      now - lastProgressAt >= PROGRESS_INTERVAL_MS
+    ) {
+      sendChatProgress(requestId, phase, startedAt, lastActivityAt);
+      lastPhase = phase;
+      lastProgressAt = now;
+    }
+
+    if (
       currentText &&
       stableSince !== null &&
       now - stableSince >= STABLE_TIME_MS &&
       !isGenerating()
     ) {
-      return currentText;
+      const finalAssistant = findLastAssistant();
+      if (finalAssistant) {
+        return serializeMessageToMarkdown(finalAssistant);
+      }
+      // ChatGPT may replace the last turn while committing the final DOM.
+      // Treat the missing node as transient and keep the idle timer alive.
+      stableSince = null;
+    }
+
+    if (now - lastActivityAt >= RESPONSE_IDLE_TIMEOUT_MS) {
+      throw new ContentBridgeError(
+        "RESPONSE_TIMEOUT",
+        "连续 5 分钟未检测到 ChatGPT 页面更新，可能仍在思考或页面结构已变化",
+      );
     }
     await sleep(POLL_INTERVAL_MS);
   }
-  throw new ContentBridgeError("RESPONSE_TIMEOUT", "等待 ChatGPT 回复超时");
 }
 
-async function chat(text) {
+async function chat(text, requestId) {
   if (typeof text !== "string" || !text.trim()) {
     throw new ContentBridgeError("INPUT_FAILED", "消息不能为空");
   }
   const beforeUserCount = userCount();
-  const beforeAssistantCount = assistantCount();
+  const baselineAssistant = findLastAssistant();
+  const startedAt = performance.now();
   await sendText(text);
   await waitForUserSubmitted(beforeUserCount);
-  await waitForNewAssistant(beforeAssistantCount);
-  await waitForResponseComplete();
-  return { text: serializeMessageToMarkdown(getLastAssistant()) };
+  sendChatProgress(requestId, "submitted", startedAt, startedAt);
+  return {
+    text: await waitForResponseComplete(requestId, baselineAssistant, startedAt),
+  };
 }
 
 async function handleMethod(message) {
@@ -704,7 +792,7 @@ async function handleMethod(message) {
     return collectHistory({ limit: message.limit, full: message.full === true });
   }
   if (message.method === "chat") {
-    return chat(message.text);
+    return chat(message.text, message.request_id);
   }
   throw new ContentBridgeError("INTERNAL_ERROR", `未知内容脚本方法：${message.method}`);
 }

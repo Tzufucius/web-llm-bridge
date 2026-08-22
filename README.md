@@ -74,6 +74,12 @@ answer = await session.chat("你好")
 
 公开接口保持兼容。`get_messages()` 无参数调用继续有效，返回当前内容脚本已经捕获的消息；`limit=N` 返回最近 N 条，`full=True` 忽略 `limit` 并请求完整历史，消息顺序始终为最早到最新。
 
+### 长思考与进度提示
+
+发送消息后，内容脚本不会要求 Assistant DOM 节点立即出现。ChatGPT 处于思考、状态刷新或流式生成阶段时，扩展会通过 WebSocket 推送进度，CLI 使用单行显示“正在思考”“正在工作”或“正在生成回复”。进度消息只关联当前 Chat RPC 的 `request_id`，不改变 `chat()` 的公开返回值。
+
+响应超时采用“连续 5 分钟没有有效页面活动”的空闲策略，而不是固定总时长；只要页面仍有消息区域、状态或 Assistant 内容更新，就会继续等待。静态 Stop 按钮本身不算活动，避免页面卡住后无限等待。若已有部分文本但连续 5 分钟无更新，Bridge 返回 `RESPONSE_TIMEOUT`，不会把半截回复当作成功答案。
+
 标签页关闭后的恢复是显式策略：
 
 ```python
@@ -96,4 +102,4 @@ session = await ChatGPTSession.open(
 
 Bridge 固定监听 `127.0.0.1:8765`，只接受 Chrome/Edge 扩展 Origin，并且同一时间只允许一个扩展 WebSocket 客户端。扩展只负责 WebSocket、标签页创建和消息路由，不保存 Conversation 历史或 Session registry。
 
-ChatGPT 页面 DOM 或 selector 变化时，可能返回 `DOM_CHANGED`、`PROMPT_NOT_FOUND`、`SEND_BUTTON_NOT_FOUND` 等结构化错误。历史加载受页面虚拟化、网络速度和 DOM 可见性影响；超时会保留部分结果并提示截断。真实登录态下的多轮对话、长历史、公式和关闭标签页恢复需要在用户的 Chrome/Edge 环境中验证。
+ChatGPT 页面 DOM 或 selector 变化时，可能返回 `DOM_CHANGED`、`PROMPT_NOT_FOUND`、`SEND_BUTTON_NOT_FOUND` 等结构化错误。历史加载受页面虚拟化、网络速度和 DOM 可见性影响；超时会保留部分结果并提示截断。聊天响应若连续 5 分钟无页面活动会返回 `RESPONSE_TIMEOUT`。真实登录态下的多轮对话、长思考、长历史、公式和关闭标签页恢复需要在用户的 Chrome/Edge 环境中验证。

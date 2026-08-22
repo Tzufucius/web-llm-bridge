@@ -248,17 +248,18 @@ async function tabRequest(method, params) {
     text: params?.text,
     limit: params?.limit,
     full: params?.full === true,
+    request_id: params?.request_id,
   });
   const currentTab = await getTab(tabId);
   return { ...result, url: currentTab.url || "" };
 }
 
-async function routeRequest(method, params) {
+async function routeRequest(method, params, requestId) {
   if (method === "open") {
     return openChatGPT(params);
   }
   if (method === "get_messages" || method === "chat") {
-    return tabRequest(method, params);
+    return tabRequest(method, { ...params, request_id: requestId });
   }
   throw bridgeError("INTERNAL_ERROR", `未知 RPC 方法：${method}`);
 }
@@ -270,7 +271,11 @@ async function handleRequest(request) {
   }
 
   try {
-    const result = await routeRequest(request.method, request.params || {});
+    const result = await routeRequest(
+      request.method,
+      request.params || {},
+      requestId,
+    );
     sendJson({ type: "response", id: requestId, ok: true, result });
   } catch (error) {
     const code = error?.code || "INTERNAL_ERROR";
@@ -291,6 +296,41 @@ async function handleRequest(request) {
     }
   }
 }
+
+const PROGRESS_PHASES = new Set(["submitted", "thinking", "working", "streaming"]);
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type !== "chat_progress") {
+    return false;
+  }
+  const tabId = sender?.tab?.id;
+  if (
+    !Number.isInteger(tabId) ||
+    !isChatGPTUrl(sender?.url || "") ||
+    typeof message.request_id !== "string" ||
+    !PROGRESS_PHASES.has(message.phase)
+  ) {
+    return false;
+  }
+  try {
+    sendJson({
+      type: "progress",
+      id: message.request_id,
+      tab_id: tabId,
+      phase: message.phase,
+      elapsed_ms: Number.isFinite(message.elapsed_ms)
+        ? Math.max(0, message.elapsed_ms)
+        : 0,
+      idle_ms: Number.isFinite(message.idle_ms)
+        ? Math.max(0, message.idle_ms)
+        : 0,
+    });
+  } catch (_error) {
+    // The Python Bridge may be between reconnects; final RPC handling is
+    // independent from best-effort progress delivery.
+  }
+  return false;
+});
 
 function ensureReconnectAlarm() {
   chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
