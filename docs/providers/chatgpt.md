@@ -1,53 +1,228 @@
+**English** | [简体中文](chatgpt.zh-CN.md)
+
 # ChatGPT Web Provider
 
-## 认证来源
+This provider exposes an already authenticated ChatGPT web tab through the
+common Web LLM Bridge session model. The generic provider contract is documented
+in [Provider Development](../provider-development.md); wire details are in
+[Protocol](../protocol.md).
 
-ChatGPT provider 只使用用户在 Chrome 或 Edge 中已经打开并完成认证的 ChatGPT 页面。
-认证动作必须由用户完成；provider 不读取密码、Cookie、Token 或 Local Storage，不
-调用私有 Conversation API，也不使用 Playwright、Selenium、CDP 或剪贴板权限。
+## Authentication and security boundary
 
-## 页面和会话
+The user signs in to ChatGPT in Chrome or Edge. The provider reuses that visible
+browser session but does not read passwords, cookies, tokens, Local Storage, or
+private conversation APIs. It does not use Playwright, Selenium, DevTools/CDP,
+or clipboard access, and the extension manifest requests no clipboard
+permission.
 
-默认入口是 `https://chatgpt.com/`。创建新会话时由 Extension 新建标签页；恢复时
-使用已登记的 Conversation URL。Session registry 只保存 URL 等元数据，标签页关闭
-后，读取操作可以按显式 `reopen_on_closed` 策略恢复一次绑定；`chat` 不应在状态不明
-时自动重发 Prompt。
+Do not place real conversation URLs, prompts, replies, or account data in test
+fixtures or logs.
 
-Conversation URL 需要规范化并校验 host。首页 URL 按新会话处理；不属于 ChatGPT 的
-URL 必须拒绝。当前 active Session 由 Persistent Broker 独占，多个 Agent 共享同一个
-Session 时操作按顺序执行。
+## Declared support
 
-## DOM 交互
+Python and extension definitions use provider ID `chatgpt`, default URL
+`https://chatgpt.com/`, and hosts `chatgpt.com` and `www.chatgpt.com`.
+The manifest declares Chrome 120 as its minimum version; current manual support
+targets Chrome or Edge 120 and later with Manifest V3 enabled.
 
-内容脚本负责：
+Declared capabilities are:
 
-- 等待输入框和发送按钮真正可用；
-- 输入并提交 Prompt，观察用户消息节点、输入框清空或生成状态等提交证据；
-- 在长思考、工具调用和流式回复期间推送 progress；
-- 通过虚拟化列表滚动和增量缓存读取历史；
-- 将 DOM 转换为 Markdown/LaTeX，不点击 ChatGPT 的 Copy 按钮。
+| Capability | Value |
+| --- | --- |
+| `chat` | `true` |
+| `getMessages` | `true` |
+| `history` | `true` |
+| `fullHistory` | `true` |
+| `markdown` | `true` |
+| `latex` | `true` |
+| `persistentConversation` | `true` |
 
-新标签页就绪或消息提交可能需要等待。提交证据在约 60 秒内仍未出现时返回
-`SEND_FAILED`。最终回复采用“连续页面活动”策略：消息区、工具状态、思考区域或
-Assistant 内容发生有效更新时继续等待；连续约 5 分钟没有有效更新才返回
-`RESPONSE_TIMEOUT`。Stop 按钮消失后还需要短暂最终确认，不能把中间流式文本当作
-最终结果。
+These capabilities describe browser-DOM behavior. They do not imply API-level
+delivery guarantees or perfect reconstruction of virtualized history.
 
-## 历史和序列化
+## URL and tab behavior
 
-`get_messages()` 无参数时读取当前内容脚本已捕获的消息；`limit=N` 返回最近 N 条；
-`full=True` 请求尽可能完整的历史。页面虚拟化、网络速度和可见性会影响捕获结果，
-因此响应应能表达截断或 best-effort 状态。消息顺序始终从最早到最新。
+Only HTTPS URLs on the two allowed hosts match. Normalization removes query and
+fragment components, removes trailing slashes from a non-root path, and keeps
+the root as `/`. The `www` host is preserved rather than redirected in metadata.
 
-序列化需保留标题、段落、粗体、斜体、列表、引用、代码、链接、表格、水平线、换行
-以及行内/块级 TeX。任何无法识别的页面结构都应保留可读文本，并在必要时返回
-`DOM_CHANGED`，而不是静默丢失内容。
+Ordinary ChatGPT URLs do not contain an explicit port and callers should not
+add one. The current Python normalizer reconstructs a URL without a port, while
+the JavaScript normalizer uses `URL.origin`; behavior for an explicit port is
+therefore not a supported parity case.
 
-## 已知错误
+For an open operation, the extension attempts, in order:
 
-调用方应处理 `PAGE_NOT_READY`、`INPUT_FAILED`、`BUSY`、`SEND_FAILED`、`TAB_CLOSED`、
-`CHAT_STATE_UNKNOWN`、`RPC_TIMEOUT` 和 `RESPONSE_TIMEOUT`；也可能遇到
-`CONTENT_SCRIPT_UNAVAILABLE` 或 `INTERNAL_ERROR`。错误码比页面文本稳定；页面
-DOM 改版后，优先更新 Extension adapter selector 和 smoke test，不要放宽认证或
-权限边界。`PROMPT_NOT_FOUND`、`SEND_BUTTON_NOT_FOUND` 等 selector 诊断只属于
-adapter 内部重试过程，不是当前 Broker 的稳定错误契约。
+1. the recorded tab, if its provider and normalized URL still match;
+2. another existing tab with the same normalized URL; or
+3. a newly created active tab.
+
+`new: true` skips reuse and creates a new tab. The extension waits up to 30
+seconds for the content script to answer `ping` before returning
+`PAGE_NOT_READY`.
+
+A persistent session record stores only the provider, session/tab IDs, current
+URL, timestamps, sequence, active flag, and recovery policy. After a successful
+chat or history read, the current tab URL is written back so navigation from the
+home page to `/c/...` can be recovered later.
+
+With `reopen_on_closed: true`, a read may reopen the recorded URL and retry once.
+A chat is never replayed. If a tab is known closed before dispatch, `TAB_CLOSED`
+may be safe to retry; if messaging fails after dispatch begins, the provider
+returns `CHAT_STATE_UNKNOWN` and retry is unsafe.
+
+## DOM profile
+
+The current profile uses these signals:
+
+| Purpose | Primary signals |
+| --- | --- |
+| Prompt | `#prompt-textarea`; visible content-editable textbox fallback |
+| Send | `#composer-submit-button`, `data-testid=send-button`, or English `Send prompt` aria-label |
+| Generation | Visible Stop button/test ID |
+| Messages | `data-message-author-role` with `user` or `assistant` |
+| Turn identity | `data-turn-id`, conversation-turn `data-testid`, then `data-turn`; per-node fallback last |
+| Completion activity | Copy/message-action controls in English or Chinese |
+| Tool/status activity | Tool, function, browser, search, code, thinking, live/status/log/busy selectors and status text |
+
+Selectors are centralized in `extension/providers/chatgpt/profile.js`. A site
+DOM release may invalidate them without changing any Python API.
+
+### Prompt entry and submission
+
+The content runtime first rejects a send while a visible Stop control indicates
+generation. It then waits up to 30 seconds for a prompt and enabled Send control,
+writes through DOM/native value semantics, dispatches an input event, and
+verifies the normalized text before clicking.
+
+After the click it waits up to 60 seconds for at least one submission signal:
+a new user message, an empty prompt, active generation, or a changed assistant
+node. Without evidence it returns `SEND_FAILED`. The `submitted` progress phase
+is emitted only after this check.
+
+### Activity, progress, and completion
+
+The runtime observes relevant mutations under the main/message/tool/status
+areas. Assistant text changes, activity snapshot changes, and completion-marker
+changes also count as effective activity. Static Stop, tool, or status elements
+do not repeatedly reset activity unless their relevant state changes.
+
+Current timing values are:
+
+| Setting | Value |
+| --- | --- |
+| Poll interval | 200 ms |
+| Progress interval | 1,500 ms |
+| Raw-text stability | 1,500 ms |
+| Serialized completion confirmation | 3,000 ms |
+| Page/send readiness | 30,000 ms |
+| Submission confirmation | 60,000 ms |
+| Response idle timeout | 300,000 ms |
+
+Progress can report `working` before submission, then `submitted`, and while
+waiting may report `thinking`, `working`, `tool_call`, or `streaming`. Progress
+includes elapsed and idle milliseconds and is never a completion signal.
+
+A response completes only when all of the following hold:
+
+- the latest assistant has non-empty text;
+- no active generation is detected;
+- raw assistant text and effective page activity are stable for 1.5 seconds;
+- the serialized candidate remains unchanged for 3 seconds; and
+- a final serialization of the current assistant node equals that candidate.
+
+Completion-marker changes reset the candidate confirmation, but the marker is
+not required to exist and its presence alone is not sufficient. If no effective
+page activity occurs for five consecutive minutes, the runtime returns
+`RESPONSE_TIMEOUT`, never partial text as success.
+
+## History behavior
+
+The content runtime continuously captures rendered `user` and `assistant`
+messages and caches `{role, content}` by turn identity. A longer rendering may
+replace a shorter cached record. The cache resets when the page origin/path
+changes, preventing turns from one conversation from leaking into another.
+
+For a full or sufficiently large request, the runtime locates the nearest
+scrollable message ancestor, scrolls upward in overlapping increments, captures
+and deduplicates turns, then restores the original position (or follows the
+bottom when the user was already near it). The history load deadline is 60
+seconds and the poll interval is 250 ms.
+
+Results are oldest to newest. `limit=N` returns the most recent N captured
+messages. `full=true` attempts all history. `truncated=true` means the deadline
+was reached. Virtualization, lazy loading, page visibility, and network speed can
+still make a non-truncated result incomplete.
+
+## Markdown and LaTeX
+
+Generic serialization preserves readable text and supports headings,
+paragraphs, bold/italic text, lists, block quotes, fenced preformatted text,
+inline code, links, tables, horizontal rules, and line breaks.
+
+The ChatGPT serializer reads `application/x-tex` annotations from Math/KaTeX
+content and emits `$...$` or a `$$` block. It suppresses duplicate KaTeX HTML,
+MathML, and MathJax presentation wrappers after extracting the TeX annotation.
+It never clicks ChatGPT's Copy button.
+
+### Known limitations
+
+Known fidelity limits include images and non-text attachments, syntax-language
+labels on code fences, code containing Markdown fence delimiters, complex nested
+lists, row/column spans, interactive citations, MathJax structures without a
+usable TeX annotation, and content not currently exposed in the DOM. Unknown
+elements fall back to readable descendant text where possible.
+
+## Errors and retry behavior
+
+Callers should handle `PAGE_NOT_READY`, `INPUT_FAILED`, `BUSY`, `SEND_FAILED`,
+`TAB_CLOSED`, `CHAT_STATE_UNKNOWN`, `RPC_TIMEOUT`, `RESPONSE_TIMEOUT`,
+`CONTENT_SCRIPT_UNAVAILABLE`, `INVALID_URL`, and `INTERNAL_ERROR`.
+
+`PROMPT_NOT_FOUND` and `SEND_BUTTON_NOT_FOUND` are internal retry diagnostics,
+not stable Broker errors. `DOM_CHANGED` is not currently emitted. DOM breakage
+normally appears as `PAGE_NOT_READY`, `SEND_FAILED`, `RESPONSE_TIMEOUT`, or an
+incomplete best-effort history result.
+
+Treat `safe_to_retry` as authoritative over message text. In particular:
+
+- pre-dispatch `TAB_CLOSED` is marked true by tab lookup;
+- post-dispatch tab/content-script/extension loss becomes
+  `CHAT_STATE_UNKNOWN` with false; and
+- all other errors default to false unless a future implementation explicitly
+  proves retry safety.
+
+## Manual authenticated-browser test
+
+Use non-sensitive content and record Chrome/Edge version, extension commit,
+ChatGPT locale, account/feature tier relevant to the run, page URL class, and
+date.
+
+1. Load the unpacked Manifest V3 extension, start the Broker, and confirm the
+   extension completes protocol version 1 handshake.
+2. Open `https://chatgpt.com/`; call `open`, then send a short prompt. Confirm the
+   URL updates when ChatGPT navigates to `/c/...` and only one final response is
+   returned.
+3. Send a response long enough to stream. Verify `streaming` progress appears
+   and the final result is not returned while text is still changing.
+4. Run a prompt that invokes an available ChatGPT tool. Verify relevant DOM
+   changes produce `tool_call`/`working` and a static completed tool card does
+   not keep the request alive forever.
+5. Test headings, emphasis, lists, quote, link, code, table, inline TeX, and block
+   TeX. Compare returned Markdown to the visible answer without using Copy.
+6. Call history with `limit`, with the public no-limit default, and with
+   `full=true` in a long conversation. Verify order, deduplication, scroll
+   restoration, and `truncated` behavior.
+7. Open the same conversation in another tab and verify normalized-URL reuse.
+   Then use `new=true` and verify a distinct tab/session is created.
+8. Close a tab before `get_messages` with recovery disabled and enabled. Confirm
+   the enabled case rebinds and retries the read once.
+9. During a chat, close the tab or reload/disable the extension. Confirm the
+   prompt is not automatically replayed and ambiguous dispatch is reported as
+   `CHAT_STATE_UNKNOWN` with `safe_to_retry: false`.
+10. Inspect `${WEB_LLM_BRIDGE_HOME:-~/.web-llm-bridge}/sessions` and process output; confirm
+    no prompt, response, cookie, token, or password was stored or logged.
+
+Last synthetic verification: 2026-08-22, Chrome/Edge Manifest V3 DOM smoke
+fixtures. A real signed-in end-to-end pass is still required before claiming a
+specific current ChatGPT page release as verified.

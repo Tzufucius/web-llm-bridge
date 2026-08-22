@@ -1,84 +1,253 @@
-# 协议
+**English** | [简体中文](protocol.zh-CN.md)
 
-本项目使用两段本地协议：Extension 与 Broker 之间使用 WebSocket，CLI/Agent 与
-Broker 之间使用 NDJSON over TCP。两段协议都只面向本机回环地址，不能视为公开远程
-API。
+# Protocol
+
+Web LLM Bridge has two local protocols:
+
+- CLI/agent to Broker: NDJSON over TCP at `127.0.0.1:8766`;
+- extension to Broker: JSON messages over WebSocket at
+  `ws://127.0.0.1:8765`.
+
+Both are loopback-only IPC. Neither is a public remote API. The current
+extension protocol version is `1`, and both transports cap a message at 8 MiB.
 
 ## Broker NDJSON
 
-Agent 连接 `127.0.0.1:8766` 后，每个请求和响应各占一行 UTF-8 JSON。请求格式：
+Each request, progress event, and final response is one UTF-8 JSON object
+terminated by a newline. A connection may contain multiple requests. The
+Broker processes lines as tasks, so callers that pipeline requests must
+correlate every event and response by `id` rather than assume response order.
+
+### Request envelope
 
 ```json
-{"id":"req-123","method":"chat","params":{"text":"你好"}}
+{"id":"req-123","method":"chat","params":{"text":"Hello"}}
 ```
 
-通用响应格式：
+| Field | Requirement |
+| --- | --- |
+| `id` | Required non-empty string, chosen by the caller. |
+| `method` | Required string naming a method below. |
+| `params` | JSON object; omitted means `{}`. |
+
+The Broker NDJSON ID remains stable for that local RPC. The Broker-to-extension
+transport creates a separate internal ID, so IDs are not end-to-end identical
+across both protocol layers.
+
+### Final responses
+
+A successful final response is:
 
 ```json
-{"id":"req-123","ok":true,"result":{"text":"你好，有什么可以帮你？"}}
+{"id":"req-123","ok":true,"result":{"text":"Hello. How can I help?"}}
 ```
 
-失败响应：
+A failed final response is:
 
 ```json
-{"id":"req-123","ok":false,"error":{"code":"RESPONSE_TIMEOUT","message":"页面在连续空闲窗口内没有完成回复","safe_to_retry":false}}
+{"id":"req-123","ok":false,"error":{"code":"RESPONSE_TIMEOUT","message":"No effective page update was detected for five minutes","safe_to_retry":false}}
 ```
 
-`id` 由调用方生成并在整个请求生命周期内保持不变。`method` 当前包括：
+Exactly one final response is sent for a valid request task. `result` is always
+an object but is method-specific; it is not an OpenAI API response shape.
+Clients should ignore unknown additive fields.
 
-| method | 作用 | 典型参数 |
-| --- | --- | --- |
-| `open` | 创建或恢复 Session | `new`、`url`、`session_id` |
-| `chat` | 发送一条 Prompt | `text` |
-| `get_messages` | 读取已捕获历史 | `limit`、`full` |
-| `list_sessions` | 列出 registry 元数据 | 无 |
+### Methods
 
-字段可扩展，但调用方必须忽略不认识的响应字段。`result` 的具体内容由 method
-定义；不要把它当作任意站点的 OpenAI API 兼容格式。
+#### `open`
 
-## Progress 事件
+Parameters:
 
-长操作可以在最终响应前发送：
+| Field | Type and behavior |
+| --- | --- |
+| `provider` | Non-empty string; defaults to `chatgpt`. |
+| `new` | Boolean; defaults to `false`. If true, `url` and `session_id` must be absent. |
+| `url` | Optional provider HTTPS URL. Mutually exclusive with `session_id`. |
+| `session_id` | Optional existing session ID. |
+| `reopen_on_closed` | Optional boolean. `null`/omitted preserves a stored policy; otherwise it replaces it. |
+
+When no explicit target is supplied, the active record for the provider is
+used if present; otherwise the provider default URL is opened. `new: true`
+creates a new tab and a new session record. Other opens may reattach to the
+recorded tab or reuse a matching provider tab.
+
+Result fields:
 
 ```json
-{"type":"progress","id":"req-123","phase":"submitted"}
+{
+  "session_id": "3d1f...",
+  "provider": "chatgpt",
+  "tab_id": 42,
+  "conversation_url": "https://chatgpt.com/c/example",
+  "sequence": 0,
+  "reopen_on_closed": false
+}
 ```
 
-`phase` 只能使用以下值：`submitted`、`thinking`、`working`、`tool_call`、
-`streaming`。进度没有独立的成功语义，调用方必须继续读取，直到收到匹配 `id` 的
-最终 response。未知 phase 应按普通进度处理。
+#### `chat`
+
+Parameters are `provider` (default `chatgpt`), optional `session_id`, and a
+non-empty string `text`. If no session is selected, the manager creates one at
+the provider default URL. The result is the session descriptor above plus a
+non-empty string `text` containing the final serialized assistant response.
+
+`sequence` is incremented before browser dispatch, even if the operation later
+fails. Callers must not use it as submission proof.
+
+#### `get_messages`
+
+Parameters are `provider`, optional `session_id`, `full`, and `limit`:
+
+- `full` must be boolean and defaults to `false`.
+- When `full` is false, `limit` may be `null` or an integer from 1 through 1000.
+- A raw Broker request that omits `limit` defaults to 5.
+- The public `WebLLMSession.get_messages()` method explicitly sends
+  `limit: null`; this returns the currently captured/visible history without
+  requesting a target count.
+- `full: true` ignores `limit` and attempts to scroll through all available
+  history.
+
+Result fields are the session descriptor plus:
+
+```json
+{
+  "messages": [
+    {"role":"user","content":"Question"},
+    {"role":"assistant","content":"Answer"}
+  ],
+  "truncated": false
+}
+```
+
+Messages are ordered oldest to newest. `truncated: true` means the history load
+deadline was reached; `false` does not guarantee that the website exposed every
+historical turn.
+
+#### `list_sessions`
+
+The optional `provider` string filters records. The result is
+`{"sessions":[...]}`. Each record contains `version`, `provider`, `session_id`,
+`tab_id`, `current_url`, `created_at`, `updated_at`, `sequence`, `active`, and
+`reopen_on_closed`. This method returns store records, so the URL field is
+`current_url`, not `conversation_url`.
+
+There is no public `close` method in protocol version 1.
+
+## Broker progress
+
+Only `chat` currently emits progress. Events precede the final response:
+
+```json
+{
+  "type": "progress",
+  "id": "req-123",
+  "provider": "chatgpt",
+  "session_id": "3d1f...",
+  "tab_id": 42,
+  "url": "https://chatgpt.com/c/example",
+  "phase": "streaming",
+  "elapsed_ms": 12400,
+  "idle_ms": 180
+}
+```
+
+Current `phase` values are `submitted`, `thinking`, `working`, `tool_call`, and
+`streaming`. The extension transport drops phases outside this set. Consumers
+should still treat a future unknown phase as observational data, never as a
+final result.
+
+`elapsed_ms` is time since the content runtime started the chat operation;
+`idle_ms` is time since its most recent effective page activity. Both are
+non-negative numbers, and the Broker supplies `0` when an extension event omits
+them. `session_id` reflects the caller's parameter and may be null when the
+manager implicitly creates a session; it is not a replacement for the final
+session descriptor.
+
+The first progress may be `working` before submission. `submitted` is emitted
+only after submission evidence is observed, but it still does not prove that a
+final answer will be produced. The caller must continue reading until the final
+response with the same Broker `id`.
 
 ## Extension WebSocket
 
-Extension 连接 `ws://127.0.0.1:8765`。Broker 只接受已登记的扩展 Origin，并限制
-为单一活动 Extension 客户端。消息仍使用 JSON 对象；字段至少包含请求 ID、操作名
-和参数，响应携带相同 ID。Extension 的内部消息不是稳定公共 API，provider 变化时
-应同时更新协议测试与 `extension/` 说明。
+### Connection and handshake
 
-## 错误处理
+The Broker accepts one active client whose Origin matches a Chrome extension
+origin. Origin rejection may occur at the WebSocket handshake and is not
+guaranteed to arrive as a JSON error.
 
-错误对象的 `code` 用于机器判断，`message` 用于诊断，`safe_to_retry` 只表示在该
-错误边界下是否可以重新执行同一 RPC。调用方不能仅根据文本判断错误。
+The extension starts with:
 
-Broker 当前会产生以下协议错误：
+```json
+{"type":"hello","protocol_version":1}
+```
 
-- `INVALID_JSON`、`INVALID_REQUEST`、`INVALID_ARGUMENT`、`UNKNOWN_METHOD`：请求格式、
-  参数、方法名或单行大小不合法；
-- `PROVIDER_NOT_FOUND`、`SESSION_NOT_FOUND`、`INVALID_URL`：provider 或会话地址不可用；
-- `EXTENSION_NOT_CONNECTED`、`EXTENSION_ALREADY_CONNECTED`、`INVALID_ORIGIN`、
-  `INCOMPATIBLE_PROTOCOL`：Extension 连接状态、来源或协议版本不符合要求；
-- `PAGE_NOT_READY`、`INPUT_FAILED`、`BUSY`、`SEND_FAILED`：页面尚未就绪、输入/控件
-  失败、仍在生成或未观察到提交证据；
-- `TAB_CLOSED`、`CHAT_STATE_UNKNOWN`：标签页关闭，或消息可能已提交但最终状态未知；
-- `RPC_TIMEOUT`、`RESPONSE_TIMEOUT`：Extension RPC 或连续页面活动等待超时；
-- `RESPONSE_TOO_LARGE`：Broker 结果超过 8 MiB NDJSON 单行限制；
-- `CONTENT_SCRIPT_UNAVAILABLE`、`INTERNAL_ERROR`：内容脚本响应无效或 Bridge 内部错误。
+The Broker responds with `{"type":"hello_ack","protocol_version":1}`. An
+incompatible hello receives an `error` message with code
+`INCOMPATIBLE_PROTOCOL`; a second active extension receives
+`EXTENSION_ALREADY_CONNECTED`. The extension also sends `ping`, to which the
+Broker replies with `pong`.
 
-客户端自身还可能报告 `INVALID_RESPONSE`（Broker 返回的 JSON 结果不符合客户端预期）。
-`DOM_CHANGED`、`PROMPT_NOT_FOUND` 和 `SEND_BUTTON_NOT_FOUND` 不是当前实现向 Broker
-稳定暴露的错误码；页面 selector 问题会归入 `PAGE_NOT_READY`、`INPUT_FAILED` 或
-`SEND_FAILED`。
+### Requests, responses, and progress
 
-JSON 解码失败、超出单行大小或连接在最终响应前关闭时，客户端应报告协议错误，
-不要把空行当作成功结果。发送 Prompt 的请求即使网络断开也不应无条件重试，因为页面
-可能已经提交了消息。
+The Broker sends:
+
+```json
+{"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"Hello"}}
+```
+
+Supported internal methods are `open`, `chat`, and `get_messages`. A response is
+either:
+
+```json
+{"type":"response","id":"transport-id","ok":true,"result":{}}
+```
+
+or:
+
+```json
+{"type":"response","id":"transport-id","ok":false,"error":{"code":"PAGE_NOT_READY","message":"...","safe_to_retry":false}}
+```
+
+Progress uses the same transport ID and includes `tab_id`, `url`, `provider`,
+`phase`, `elapsed_ms`, and `idle_ms`. This WebSocket contract is internal: a
+provider change may update it together with extension and protocol tests.
+
+## Errors and retry safety
+
+Every Broker failure contains machine-readable `code`, diagnostic `message`,
+and boolean `safe_to_retry`. Do not infer behavior from localized message text.
+
+`safe_to_retry` has a narrow meaning: repeating the same RPC is known not to
+duplicate a page-side effect at the point where the error was produced. It does
+not mean the retry will succeed. `false` means a blind retry is not proven safe,
+not necessarily that the failure is permanent.
+
+The current implementation defaults this field to `false`. The notable explicit
+safe case is a pre-dispatch `TAB_CLOSED`, which the extension marks true.
+`CHAT_STATE_UNKNOWN` is always false: dispatch began, and tab or messaging loss
+made it impossible to determine whether the prompt was submitted. Never
+automatically replay that prompt.
+
+Current Broker-facing error codes include:
+
+| Area | Codes |
+| --- | --- |
+| Envelope and arguments | `INVALID_JSON`, `INVALID_REQUEST`, `INVALID_ARGUMENT`, `UNKNOWN_METHOD` |
+| Provider/session selection | `PROVIDER_NOT_FOUND`, `SESSION_NOT_FOUND`, `INVALID_URL` |
+| Extension availability | `EXTENSION_NOT_CONNECTED`, `TAB_CLOSED`, `CONTENT_SCRIPT_UNAVAILABLE` |
+| Page operation | `PAGE_NOT_READY`, `INPUT_FAILED`, `BUSY`, `SEND_FAILED` |
+| Ambiguous chat | `CHAT_STATE_UNKNOWN` |
+| Time and size | `RPC_TIMEOUT`, `RESPONSE_TIMEOUT`, `RESPONSE_TOO_LARGE` |
+| Fallback | `INTERNAL_ERROR` |
+
+`PROMPT_NOT_FOUND` and `SEND_BUTTON_NOT_FOUND` are internal content-runtime
+diagnostics currently retried and collapsed into `PAGE_NOT_READY` at the stable
+Broker boundary. `DOM_CHANGED` is not a current stable error code.
+
+Handshake conditions also use `INCOMPATIBLE_PROTOCOL` and
+`EXTENSION_ALREADY_CONNECTED`; an invalid Origin is rejected by the WebSocket
+server. The Python client may raise client-side `INVALID_RESPONSE` for malformed,
+oversized, or non-object Broker results. A connection closing before a final
+response is also a client-side transport failure and must not be treated as
+success.

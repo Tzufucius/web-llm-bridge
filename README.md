@@ -1,172 +1,162 @@
 # Web LLM Bridge
 
-`web-llm-bridge` 是一个本地 WebSocket/NDJSON bridge：它把用户已经在 Chrome 或
-Edge 中完成认证的 ChatGPT 页面，提供给本机 CLI 或 Agent 使用。项目当前只支持
-ChatGPT Web，不是通用的 LLM 网关，也不替代用户的登录流程。
+**English** | [简体中文](README.zh-CN.md)
+
+![AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg) ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg) ![Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
+
+`web-llm-bridge` exposes an already authenticated supported LLM web page to local Python, shells, and agents. ChatGPT Web is the only implemented provider.
+
+## Why Web LLM Bridge?
+
+It gives an existing browser session a local control plane: the extension owns page DOM work and the Broker owns local sessions and NDJSON RPC. It is not a general gateway, OpenAI-compatible API, or login replacement.
+The Bridge itself does not require a Provider API key because interaction stays
+inside the user's existing authenticated browser session; it does not bypass
+Provider quotas, limits, access controls, or verification.
+
+## Architecture Diagram
 
 ```text
-已认证的 Chrome/Edge ChatGPT 页面
-            |
-        Manifest V3 Extension
-            | ws://127.0.0.1:8765
-        Persistent Broker
-            | NDJSON 127.0.0.1:8766
-        Human CLI / Agent CLI
+Local CLI / Python application / shell agent
+                 | NDJSON over TCP, 127.0.0.1:8766
+                 v
+Persistent Broker -------- SessionStore (metadata only)
+                 | WebSocket, 127.0.0.1:8765
+                 v
+Manifest V3 Extension -> authenticated ChatGPT Web tab
 ```
 
-## 安全边界
+## Features
 
-- 登录、验证码和多因素认证只在用户自己的浏览器中完成；项目不接收密码。
-- Extension 不读取、保存或转发 Cookie、Token、密码或系统剪贴板，也不调用 ChatGPT
-  私有 Conversation API。
-- Broker 和 Agent endpoint 默认只绑定 `127.0.0.1`。它们不是远程服务，不能替代
-  网络边界、主机权限或浏览器自身的安全策略。
-- Session registry 只记录 Session ID、Conversation URL、时间、序号和 active 状态，
-  不记录 Prompt、回复正文或完整对话历史。请把运行目录视为本机敏感状态，不要共享
-  其中的 URL。
-- 页面 DOM 和 selector 属于 ChatGPT Web 的可变实现。页面结构变化、页面未就绪、会话
-  关闭和响应空闲超时会返回结构化错误；调用方必须处理失败，不应假定每次请求都成功。
-- 请遵守 ChatGPT、浏览器和所在组织的使用政策。不要把本项目用于绕过访问控制、限制
-  或安全验证。
+- NDJSON RPC, JSON output, stdin prompts; `open`, `chat`, `get_messages`; persistent registry, URL recovery, tab attach and optional reopen.
+- Full progress phases (`submitted`, `thinking`, `working`, `tool_call`, `streaming`); idle timeout; Markdown/LaTeX and virtualized-history capture.
+- At-most-once Broker delivery for `chat`: uncertain submission returns `CHAT_STATE_UNKNOWN` and is never automatically resent.
 
-## Supported providers
+## Project Status
 
-- ✅ **ChatGPT Web**：v0.1 的唯一实现，使用用户已经认证的 Chrome/Edge 浏览器会话。
-- ⏳ **Second provider validation**：v0.2 规划中的验证目标，尚未实现。
-- 🧪 **Gemini、Grok、DeepSeek、Kimi、Doubao、AI Studio**：future planned/experimental，
-  不承诺版本或交付时间。
+Alpha. Browser DOM is an external, changing dependency; callers must handle structured failures.
 
-Provider 接口、Broker 和协议的抽象用于隔离站点差异，但当前可运行能力仍只有
-ChatGPT Web。
+## Supported Providers
 
-## 安装
+| Provider | Status | Persistent Session | History | Markdown/LaTeX |
+| --- | --- | --- | --- | --- |
+| ChatGPT Web | Supported / Alpha | Yes | Yes | Yes |
+| Second provider validation | v0.2 planned | — | — | — |
+| Gemini, Grok, DeepSeek, Kimi, Doubao, AI Studio | Planned / not implemented | — | — | — |
 
-要求 Python 3.11 或更高版本。请在当前操作系统选定的虚拟环境中执行：
+Planned Providers have no delivery date or compatibility commitment.
 
+## Quick Start
+
+### Install
+```console
+git clone https://github.com/Tuzfucius/web-llm-bridge.git
+cd web-llm-bridge
+python -m venv .venv
+```
+Windows PowerShell: `.venv\Scripts\Activate.ps1`
+Linux/macOS: `source .venv/bin/activate`
 ```console
 python -m pip install -U pip
 python -m pip install -e .
 ```
 
-也可以只安装运行依赖：
+### Load The Extension
+1. Open `chrome://extensions` or `edge://extensions` and enable Developer mode.
+2. Choose **Load unpacked**, select [`extension/`](extension/), then authenticate to ChatGPT yourself in that browser profile.
 
-```console
-python -m pip install -r requirements.txt
-```
-
-安装后可使用三个 console script：`web-llm-broker`、`web-llm-agent` 和
-`web-llm-bridge`。直接从源码运行时，请使用同一个 Python 解释器安装和启动，避免
-`websockets` 被安装到另一个环境。
-
-## 浏览器扩展
-
-1. 在 Chrome 打开 `chrome://extensions`，或在 Edge 打开 `edge://extensions`。
-2. 开启“开发者模式”。
-3. 选择“加载已解压的扩展程序”，指向本仓库的 `extension/` 目录。
-4. 在同一个浏览器配置中打开 ChatGPT，并按站点要求完成认证。
-
-扩展没有独立的登录页，也不会保存登录材料。点击扩展图标会尝试连接本机 bridge，
-Broker 未启动时会自动重连。扩展最低要求 Chrome/Edge 120。
-
-## 启动与使用
-
-### 跨平台 Python 启动入口
-
-人工交互控制台会自动启动或复用 Broker：
-
-```bash
-python scripts/manual_console.py
-```
-
-智能体通过第二个入口执行单次 CLI 命令：
-
-```bash
-python scripts/agent_cli.py list-sessions --json
-python scripts/agent_cli.py open --new --json
-python scripts/agent_cli.py chat --text "Reply with 123" --json
-```
-
-两个脚本只依赖 Python，适用于 Windows、macOS 和 Linux。Broker 日志和 PID 写入
-`${WEB_LLM_BRIDGE_HOME:-~/.web-llm-bridge}/runtime`。浏览器扩展仍需由用户在
-Chrome/Edge 中加载并完成登录；脚本不会读取认证信息，也不会自动操作浏览器。
-
-### 分步启动
-
-先启动唯一持有 Extension WebSocket 的 Broker：
-
+### First Session And Chat
 ```console
 web-llm-broker serve
 ```
 
-再打开交互式终端：
+Keep that terminal open. If the installed console script is unavailable, use
+`python -m web_llm_bridge.broker.server serve`. In a second terminal:
 
 ```console
+web-llm-agent open --new --json
+```
+```json
+{"session_id":"SESSION_ID","provider":"chatgpt","conversation_url":"https://chatgpt.com/c/CONVERSATION_ID","sequence":0}
+```
+```console
+web-llm-agent chat --session-id SESSION_ID --text "Reply with exactly: Hello from Web LLM Bridge" --json
+cat prompt.md | web-llm-agent chat --session-id SESSION_ID --stdin --json
+```
+
+For multiline prompts, source code, JSON, Markdown, and long Agent instructions,
+stdin is recommended because it avoids shell quoting and command-line length limits.
+
+## Using With Agents
+
+`web-llm-agent` runs one `open`, `chat`, `get-messages`, or `list-sessions` action. It fits Codex, Claude Code, OpenClaw, Hermes, custom agents, and CI when they can invoke a shell command, supply stdin, and consume stdout. Successful `--json` output is one final result JSON object on stdout; progress is stderr. Failure is a human-readable `Error: ...` on stderr, not guaranteed JSON stdout. Raw Broker errors are structured NDJSON with `code`, `message`, and `safe_to_retry`; progress and the final response share `id`.
+
+```json
+{"id":"req-123","ok":false,"error":{"code":"CHAT_STATE_UNKNOWN","message":"...","safe_to_retry":false}}
+```
+
+### At-most-once prompt submission
+
+If the Extension, tab, or browser becomes unreachable after sending and the system cannot prove that the prompt was not submitted, the call returns `CHAT_STATE_UNKNOWN` instead of resending. `safe_to_retry: false` means an agent must not automatically repeat the original prompt. Inspect the Conversation or call `get-messages` before deciding whether another prompt is appropriate.
+
+## Persistent Session Model
+
+Session ID is the stable local handle; tab ID identifies the current browser runtime tab; Conversation URL is the persistent recovery identity. A tab can change while the Conversation remains the same. Context is maintained by the ChatGPT Web Conversation itself: the Bridge does not reconstruct and resend the full history for every request. Registry data excludes prompts, replies, cookies, tokens, and passwords; deleting it does not delete browser conversations.
+
+## CLI Reference
+```console
+web-llm-agent open --new --json
+web-llm-agent open --url https://chatgpt.com/c/CONVERSATION_ID --json
+web-llm-agent list-sessions --json
+web-llm-agent get-messages --session-id SESSION_ID --limit 5 --json
 web-llm-bridge
 ```
 
-交互式终端会引导你创建新 Conversation 或恢复已登记的 Conversation URL。输入
-`/history`、`/history N` 或 `/history all` 可读取页面已捕获的消息；输入 `/exit`
-或 `/quit` 只关闭本地 bridge，不关闭浏览器标签页。
+## Python API
+```python
+from web_llm_bridge import WebLLMSession
 
-### Agent CLI 与 stdin
-
-Agent CLI 面向脚本和 Shell Agent，默认输出适合人读的文本；加 `--json` 输出一行
-一个 JSON 对象（NDJSON）：
-
-```console
-web-llm-agent list-sessions --json
-web-llm-agent open --new --json
-web-llm-agent chat --text "请用三句话总结今天的工作"
+async with await WebLLMSession.open(new=True) as session:
+    answer = await session.chat("Reply with 123")
+    history = await session.get_messages(limit=5)
 ```
 
-长文本从 stdin 传入，不需要把内容拼接到命令行参数：
+## Architecture
 
-```console
-web-llm-agent chat --stdin --json
+The extension owns selectors, input, submission evidence, completion, and serialization. The Broker owns its one extension connection, session serialization, errors, and metadata persistence. Python providers remain DOM-free. See [architecture](docs/architecture.md) and [protocol](docs/protocol.md).
+
+### Repository Layout
+
+```text
+web_llm_bridge/              Python transport, session, Broker, client, and CLI
+extension/core/              Provider-independent browser runtime
+extension/providers/chatgpt/ ChatGPT DOM adapter and serializer
+scripts/                     Cross-platform manual and Agent launchers
+tests/                       Protocol, session, CLI, and browser-runtime regressions
+docs/                        Architecture, protocol, and Provider documentation
+examples/                    Minimal Python and Agent CLI examples
 ```
 
-Broker 的 NDJSON 请求至少包含 `id`、`method` 和 `params`；响应包含同一个 `id`、
-`ok`，成功时带 `result`，失败时带 `error.code`、`error.message` 和
-`error.safe_to_retry`。进度消息使用 `type: "progress"`，调用方应按 `id` 过滤，
-不要把进度事件误当成最终响应。协议细节见 [docs/protocol.md](docs/protocol.md)。
+## Security Model
 
-## 私有 submodule 认证
+No password, cookie, token, clipboard data, private API, Playwright, Selenium, CDP, CAPTCHA bypass, or quota/access-limit bypass is used. Authentication remains in the browser. Broker uses `127.0.0.1:8766`; extension transport uses `127.0.0.1:8765`; neither is a remote service or authorization boundary.
 
-本仓库将作为 `Tuzfucius/math-modeling` 的 private submodule 使用；它自身不包含
-provider submodule。首次获取父仓库时，需要通过 GitHub HTTPS authentication 访问
-父仓库及其 submodule：
+## Runtime Data
 
-```console
-git clone --recurse-submodules https://github.com/Tuzfucius/math-modeling.git
-cd math-modeling
-git submodule update --init --recursive
-```
+Home is `~/.web-llm-bridge` or `WEB_LLM_BRIDGE_HOME`. `sessions/` contains recovery metadata, while `runtime/` contains `broker.pid`, `broker.stdout.log`, and `broker.stderr.log`. The Bridge does not store full Conversation text there. Treat this as sensitive local state because Session records include Conversation URLs.
 
-请按 GitHub 的组织策略配置 HTTPS credential manager 或 PAT。不要把 PAT、SSH 私钥、
-Cookie 或会话 URL 写进 `pyproject.toml`、`.env`、示例、日志或提交记录。submodule
-访问授权属于 GitHub/Git 配置，不属于 bridge 协议；权限不足时应修复 Git 认证，而
-不是把凭据传给浏览器扩展。
+## Limitations
 
-## 文档
+One registered extension is active at a time. Lines are limited to 8 MiB. DOM changes, closed tabs, unavailable extensions, and timeouts are expected failures. Open has 30 seconds, history 70 seconds, and chat five minutes of continuous inactivity, reset by progress.
 
-- [架构](docs/architecture.md)：进程、provider 和 session 生命周期。
-- [协议](docs/protocol.md)：Extension WebSocket 与 Broker NDJSON 约定。
-- [Provider 开发](docs/provider-development.md)：新增 provider 时的边界和测试要求。
-- [ChatGPT provider](docs/providers/chatgpt.md)：现有认证浏览器会话的实现约束。
-- [基础示例](examples/basic_chat.py)：最小异步调用示例。
-- [Agent CLI 示例](examples/agent_cli.md)：stdin、JSON 和错误处理。
+## Contributing
+
+Contributions are welcome. Before changing browser adapters or adding a Provider, read [CONTRIBUTING.md](CONTRIBUTING.md), [architecture](docs/architecture.md), and [Provider development](docs/provider-development.md). Chinese documentation is available in [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md), [架构](docs/architecture.zh-CN.md), and [Provider 开发](docs/provider-development.zh-CN.md).
 
 ## Roadmap
+1. Stabilize ChatGPT capabilities, errors, and protocol behavior for v0.1.
+2. Validate a second-provider adapter contract in v0.2, without promising an implementation.
+3. Improve redacted diagnostics and protocol negotiation while retaining local defaults.
 
-以下版本标签是规划状态，不承诺时间：
+## License
 
-1. **v0.1 ChatGPT**：稳定 ChatGPT provider 的 capability、错误码和协议行为。
-2. **v0.2 second provider validation**：验证第二个 provider 的 Adapter Contract，
-   不表示已提供可用实现。
-3. **Future**：Gemini、Grok、DeepSeek、Kimi、Doubao、AI Studio planned/experimental；
-   在符合服务条款和用户显式授权前提下评估，不承诺时间或兼容性。
-4. 持续增加脱敏诊断和协议版本协商，同时保持本机默认绑定和最小权限。
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE)。
+Web LLM Bridge is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). When distributing a modified covered version, you must provide Corresponding Source as required by the AGPL. When a modified covered program offers interaction to users over a network, Section 13 requires an opportunity to receive that version's Corresponding Source. Whether a separate program forms a covered combination or derivative work depends on the license text, applicable law, and the relevant facts. The [LICENSE](LICENSE) file is the authoritative legal text.
