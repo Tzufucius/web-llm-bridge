@@ -9,6 +9,7 @@ import sys
 from typing import Any
 
 from ..client import rpc_call
+from ..errors import WebLLMBridgeError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -54,20 +55,42 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     return await rpc_call("list_sessions", {"provider": args.provider})
 
 
+def _emit_error(args: argparse.Namespace, *, code: str, message: str, safe_to_retry: bool = False) -> int:
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": code,
+                        "message": message,
+                        "safe_to_retry": safe_to_retry,
+                    },
+                },
+                ensure_ascii=False,
+            )
+        )
+    else:
+        print(f"Error: {message}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Keep argparse's native exit code and diagnostics for invalid command lines.
+    args = _parser().parse_args(argv)
     try:
-        args = _parser().parse_args(argv)
         result = asyncio.run(_run(args))
         if args.json:
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps({"ok": True, "result": result}, ensure_ascii=False))
         elif "text" in result:
             print(result["text"])
         else:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    except WebLLMBridgeError as exc:
+        return _emit_error(args, code=exc.code, message=str(exc), safe_to_retry=exc.safe_to_retry)
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
+        return _emit_error(args, code="INTERNAL_ERROR", message=str(exc) or "Internal error")
 
 
 if __name__ == "__main__":
