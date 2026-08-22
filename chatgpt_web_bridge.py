@@ -77,7 +77,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "CONTENT_SCRIPT_UNAVAILABLE": "ChatGPT 内容脚本不可用",
     "PROMPT_NOT_FOUND": "未找到 ChatGPT 输入框",
     "INPUT_FAILED": "文本未成功写入 ChatGPT 输入框",
-    "SEND_FAILED": "消息点击发送后未确认提交成功",
+    "SEND_FAILED": "ChatGPT 页面在 60 秒内未确认消息提交，可能仍在加载或页面结构已变化",
     "SEND_BUTTON_NOT_FOUND": "未找到可靠的 ChatGPT 发送按钮",
     "BUSY": "ChatGPT 当前仍在生成回复",
     "RESPONSE_TIMEOUT": "连续 5 分钟未检测到页面更新，等待 ChatGPT 回复超时",

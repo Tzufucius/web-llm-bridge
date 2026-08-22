@@ -60,6 +60,8 @@ python tools/chatgpt_web_bridge/chatgpt_web_bridge.py
 
 启动时只显示加载数量和是否截断，不自动打印全部消息。历史读取在内容脚本中通过 DOM 滚动和 `turnCache` 增量缓存完成，适配 ChatGPT 的虚拟化消息列表；超出 60 秒时返回已经捕获的消息并标记截断，同时记录 warning，因此这是 best-effort 历史加载，不保证私有页面状态下的绝对完整性。
 
+新建标签页后，ChatGPT 可能仍在加载会话、输入框或发送按钮。内容脚本会等待页面就绪，发送按钮暂时不可用时持续轮询；点击发送后还会等待用户消息节点、输入框清空、生成状态或 Assistant 节点等提交证据，最长约 60 秒。等待期间 CLI 会显示“ChatGPT 正在工作”，不会立即把页面卡顿当作发送失败。超过等待窗口仍没有任何提交证据，才返回 `SEND_FAILED`，这通常表示页面仍未完成加载或 DOM 结构已变化。
+
 输出统一由 DOM Markdown/LaTeX serializer 生成，支持标题、段落、粗体、斜体、列表、引用、代码、链接、表格、水平线、换行和行内/块级 TeX。不会点击 ChatGPT 的 Copy 按钮，也不会静默覆盖系统剪贴板。
 
 ## Python 接口
