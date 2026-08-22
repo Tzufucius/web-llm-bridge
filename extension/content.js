@@ -560,9 +560,9 @@ async function collectHistoryInternal(options) {
       }
     }
     const messages = getCachedMessages();
-    truncated =
-      performance.now() >= deadline ||
-      (limit !== null && !full && messages.length < limit);
+    // Reaching the top with fewer messages means the conversation is shorter
+    // than the requested limit, not that history loading was truncated.
+    truncated = performance.now() >= deadline;
     return {
       messages: full || limit === null ? messages : messages.slice(-limit),
       truncated,
