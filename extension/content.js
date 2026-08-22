@@ -240,7 +240,7 @@ function shouldSkipSerializedElement(element) {
 function serializeTable(element) {
   const rows = [...element.querySelectorAll("tr")].map((row) =>
     [...row.querySelectorAll("th, td")].map((cell) =>
-      escapeTableCell(cell.innerText || cell.textContent || ""),
+      escapeTableCell(serializeChildren(cell)),
     ),
   );
   const usableRows = rows.filter((row) => row.length > 0);
