@@ -54,12 +54,15 @@ async function runSmoke() {
   const assistants = [];
   let generating = false;
   let clicked = false;
+  let pageReady = false;
   const progress = [];
   const prompt = new FakeNode("prompt");
   const sendButton = new FakeNode("button");
   const main = new FakeNode("main");
   const body = new FakeNode("body");
   const stopButton = new FakeNode("stop", { "data-testid": "stop-button" });
+
+  setTimeout(() => { pageReady = true; }, 80);
 
   sendButton.click = () => {
     if (clicked) return;
@@ -76,8 +79,7 @@ async function runSmoke() {
   const allNodes = () => [
     main,
     body,
-    prompt,
-    sendButton,
+    ...(pageReady ? [prompt, sendButton] : []),
     ...(generating ? [stopButton] : []),
     ...users,
     ...assistants,
