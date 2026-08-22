@@ -75,6 +75,20 @@ web-llm-broker serve
 
 The installed `web-llm-agent` launcher can also start or reuse a local Broker when needed. The module fallback is `python -m web_llm_bridge.broker.server serve`.
 
+### Scripts
+
+The [`scripts/`](scripts/) directory provides cross-platform Python launchers:
+
+- `python scripts/agent_cli.py ...` runs one Agent CLI command and starts or reuses the local Broker.
+- `python scripts/manual_console.py` starts or reuses the Broker and opens the interactive console.
+
+For example:
+
+```console
+python scripts/agent_cli.py chat --text "Review this implementation" --json
+python scripts/manual_console.py
+```
+
 ### Chat
 
 ```console
@@ -131,8 +145,13 @@ The bridge avoids automatically resending prompts when submission state is uncer
 
 | Provider | Status |
 | --- | --- |
-| ChatGPT Web | ✅ Alpha |
-| Additional LLM Web providers | Planned |
+| ChatGPT Web | ☑ Alpha |
+| Grok Cloud | ☐ Planned |
+| Kimi | ☐ Planned |
+| DeepSeek | ☐ Planned |
+| Doubao | ☐ Planned |
+| Gemini | ☐ Planned |
+| Google AI Studio | ☐ Planned |
 
 The current release focuses on stabilizing the ChatGPT adapter before additional providers are added.
 
