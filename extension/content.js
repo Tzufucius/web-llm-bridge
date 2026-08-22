@@ -11,10 +11,17 @@ const STOP_BUTTON_SELECTORS = [
   '[data-testid="stop-button"]',
   'button[aria-label*="Stop"]',
 ];
+const COMPLETION_MARKER_SELECTORS = [
+  '[data-testid*="copy"]',
+  '[data-testid*="message-actions"]',
+  'button[aria-label*="Copy" i]',
+  'button[aria-label*="复制"]',
+];
 const MESSAGE_SELECTOR = "[data-message-author-role]";
 const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
 const USER_SELECTOR = '[data-message-author-role="user"]';
 const STABLE_TIME_MS = 1_500;
+const COMPLETION_CONFIRMATION_MS = 3_000;
 const POLL_INTERVAL_MS = 200;
 const RESPONSE_IDLE_TIMEOUT_MS = 300_000;
 const PROGRESS_INTERVAL_MS = 1_500;
@@ -231,6 +238,22 @@ function userCount() {
 function findLastAssistant() {
   const nodes = document.querySelectorAll(ASSISTANT_SELECTOR);
   return nodes.length > 0 ? nodes[nodes.length - 1] : null;
+}
+
+function hasCompletionMarker(node) {
+  if (!node) {
+    return false;
+  }
+  const roots = [node, node.parentElement].filter(Boolean);
+  return roots.some((root) =>
+    COMPLETION_MARKER_SELECTORS.some((selector) => {
+      try {
+        return Boolean(root.matches?.(selector) || root.querySelector(selector));
+      } catch (_error) {
+        return false;
+      }
+    }),
+  );
 }
 
 async function sleep(milliseconds) {
@@ -836,6 +859,9 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
   let observedActivity = false;
   let activityKind = "thinking";
   let lastActivitySnapshot = readResponseActivitySnapshot();
+  let lastCompletionMarker = hasCompletionMarker(baselineAssistant);
+  let completionCandidateSince = null;
+  let completionSerializedText = null;
 
   sendChatProgress(requestId, "thinking", startedAt, lastActivityAt);
 
@@ -847,14 +873,22 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
     const activitySnapshot = readResponseActivitySnapshot();
     const snapshotChanged =
       activitySnapshot.signature !== lastActivitySnapshot.signature;
+    const completionMarker = hasCompletionMarker(assistant);
+    const completionMarkerChanged = completionMarker !== lastCompletionMarker;
 
-    if (revisionChanged || currentText !== lastText || snapshotChanged) {
+    if (
+      revisionChanged ||
+      currentText !== lastText ||
+      snapshotChanged ||
+      completionMarkerChanged
+    ) {
       lastActivityAt = now;
       lastRevision = responseActivityRevision;
       observedActivity = true;
       activityKind = activitySnapshot.toolCall ? "tool_call" : "working";
     }
     lastActivitySnapshot = activitySnapshot;
+    lastCompletionMarker = completionMarker;
 
     const assistantChanged = assistant !== lastAssistantNode;
     if (assistantChanged) {
@@ -863,6 +897,29 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
     if (currentText !== lastText || assistantChanged) {
       lastText = currentText;
       stableSince = currentText ? now : null;
+    }
+
+    const generating = isGenerating();
+    if (!generating && currentText && assistant) {
+      const serializedText = serializeMessageToMarkdown(assistant);
+      if (completionMarkerChanged) {
+        completionCandidateSince = null;
+        completionSerializedText = null;
+      }
+      if (completionSerializedText !== serializedText) {
+        if (completionSerializedText !== null) {
+          lastActivityAt = now;
+          stableSince = now;
+          observedActivity = true;
+        }
+        completionSerializedText = serializedText;
+        completionCandidateSince = now;
+      } else if (completionCandidateSince === null) {
+        completionCandidateSince = now;
+      }
+    } else {
+      completionCandidateSince = null;
+      completionSerializedText = null;
     }
 
     const phase = currentText
@@ -887,14 +944,21 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
       stableSince !== null &&
       now - stableSince >= STABLE_TIME_MS &&
       now - lastActivityAt >= STABLE_TIME_MS &&
-      !isGenerating()
+      completionCandidateSince !== null &&
+      now - completionCandidateSince >= COMPLETION_CONFIRMATION_MS &&
+      !generating
     ) {
       const finalAssistant = findLastAssistant();
       if (finalAssistant) {
-        return serializeMessageToMarkdown(finalAssistant);
+        const finalText = serializeMessageToMarkdown(finalAssistant);
+        if (finalText && finalText === completionSerializedText) {
+          return finalText;
+        }
       }
-      // ChatGPT may replace the last turn while committing the final DOM.
-      // Treat the missing node as transient and keep the idle timer alive.
+      // ChatGPT may replace the last turn or finish serializing it while the
+      // completion candidate is being checked. Treat that as transient.
+      completionCandidateSince = null;
+      completionSerializedText = null;
       stableSince = null;
     }
 
