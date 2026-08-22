@@ -1,0 +1,9 @@
+const assert = require("node:assert/strict");
+const { FakeNode, loadContentRuntime } = require("./helpers");
+async function run(submits) {
+  const users = []; const assistants = []; let ready = false; let generating = false; const progress = []; const prompt = new FakeNode("prompt"); const button = new FakeNode("button"); const stop = new FakeNode("stop", { "data-testid": "stop-button" }); const body = new FakeNode("body");
+  setTimeout(() => { ready = true; }, 20); button.click = () => { if (!submits) return; setTimeout(() => { prompt.value = ""; users.push(new FakeNode("user", { "data-message-author-role": "user" }, "延迟提交")); assistants.push(new FakeNode("assistant", { "data-message-author-role": "assistant" }, "页面加载完成")); generating = true; }, 40); setTimeout(() => { generating = false; }, 70); };
+  const all = () => [body, ...(ready ? [prompt, button] : []), ...(generating ? [stop] : []), ...users, ...assistants]; const document = { body, scrollingElement: body, querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }, querySelectorAll(selector) { if (selector.includes('="user"')) return users; if (selector.includes('="assistant"')) return assistants; return all().filter((node) => node.matches(selector)); }, execCommand: () => false };
+  const { listeners } = loadContentRuntime({ document, progress, timingOverrides: { submissionConfirmationTimeoutMs: 100, responseIdleTimeoutMs: 200 } }); const response = await new Promise((resolve) => listeners[0]({ method: "chat", text: "延迟提交", request_id: "submit" }, {}, resolve)); if (!submits) { assert.equal(response.ok, false); assert.equal(response.error.code, "SEND_FAILED"); return; } assert.equal(response.ok, true); assert.equal(response.result.text, "页面加载完成"); assert.ok(progress.some((event) => event.phase === "working"));
+}
+(async () => { await run(true); await run(false); })().catch((error) => { console.error(error); process.exitCode = 1; });

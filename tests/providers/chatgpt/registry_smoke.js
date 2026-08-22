@@ -1,0 +1,12 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+const root = path.resolve(__dirname, "../../..");
+const context = { globalThis: null, URL }; context.globalThis = context; vm.createContext(context);
+for (const file of ["extension/core/registry.js", "extension/providers/chatgpt/profile.js", "extension/providers/chatgpt/serializer.js", "extension/providers/chatgpt/adapter.js"]) vm.runInContext(fs.readFileSync(path.join(root, file), "utf8"), context, { filename: file });
+assert.equal(context.WebLLMBridge.listProviders().length, 1);
+assert.equal(context.WebLLMBridge.getProvider("chatgpt").id, "chatgpt");
+assert.equal(context.WebLLMBridge.getProvider("chatgpt").capabilities.fullHistory, true);
+assert.equal(context.WebLLMBridge.getProvider("chatgpt").capabilities.latex, true);
+assert.throws(() => context.WebLLMBridge.registerProvider({ id: "chatgpt" }), /已注册/);
