@@ -166,6 +166,7 @@ async function runSmoke({ complete = true } = {}) {
 
   const source = fs.readFileSync(SOURCE_PATH, "utf8")
     .replace("const STABLE_TIME_MS = 1_500;", "const STABLE_TIME_MS = 20;")
+    .replace("const COMPLETION_CONFIRMATION_MS = 3_000;", "const COMPLETION_CONFIRMATION_MS = 40;")
     .replace("const POLL_INTERVAL_MS = 200;", "const POLL_INTERVAL_MS = 10;")
     .replace("const RESPONSE_IDLE_TIMEOUT_MS = 300_000;", "const RESPONSE_IDLE_TIMEOUT_MS = 250;")
     .replace("const PROGRESS_INTERVAL_MS = 1_500;", "const PROGRESS_INTERVAL_MS = 20;")

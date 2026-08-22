@@ -76,7 +76,7 @@ class FakeNode {
   }
 }
 
-async function runScenario({ finalDelay, replaceAssistant = false, markerDelay = null, expectText }) {
+async function runScenario({ finalDelay, replaceAssistant = false, markerDelay = null, expectText, withAssistant = true }) {
   const users = [];
   const assistants = [];
   let marker = null;
@@ -102,22 +102,24 @@ async function runScenario({ finalDelay, replaceAssistant = false, markerDelay =
     submitted = true;
     generating = true;
     users.push(new FakeNode("user", { "data-message-author-role": "user" }, "问题"));
-    const first = new FakeNode("assistant", { "data-message-author-role": "assistant" }, "这是一个");
-    assistants.push(first);
-    setTimeout(() => { generating = false; }, 50);
-    setTimeout(() => {
-      const final = new FakeNode("assistant", { "data-message-author-role": "assistant" }, "这是一个完整项目");
-      if (replaceAssistant) assistants.splice(0, 1, final);
-      else {
-        first.innerText = final.innerText;
-        first.textContent = final.textContent;
-      }
-    }, finalDelay);
-    if (markerDelay !== null) {
+    if (withAssistant) {
+      const first = new FakeNode("assistant", { "data-message-author-role": "assistant" }, "这是一个");
+      assistants.push(first);
+      setTimeout(() => { generating = false; }, 50);
       setTimeout(() => {
-        marker = new FakeNode("marker", { "data-testid": "message-actions-copy" }, "");
-        for (const assistant of assistants) assistant.marker = marker;
-      }, markerDelay);
+        const final = new FakeNode("assistant", { "data-message-author-role": "assistant" }, "这是一个完整项目");
+        if (replaceAssistant) assistants.splice(0, 1, final);
+        else {
+          first.innerText = final.innerText;
+          first.textContent = final.textContent;
+        }
+      }, finalDelay);
+      if (markerDelay !== null) {
+        setTimeout(() => {
+          marker = new FakeNode("marker", { "data-testid": "message-actions-copy" }, "");
+          for (const assistant of assistants) assistant.marker = marker;
+        }, markerDelay);
+      }
     }
   };
 
@@ -164,15 +166,14 @@ async function runScenario({ finalDelay, replaceAssistant = false, markerDelay =
   const response = await new Promise((resolve) => {
     listeners[0]({ method: "chat", text: "问题", request_id: "req-stream" }, {}, resolve);
   });
+  if (!withAssistant) {
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "RESPONSE_TIMEOUT");
+    return;
+  }
   assert.equal(response.ok, true);
   assert.equal(response.result.text, expectText);
   assert.ok(progress.every((message) => message.request_id === "req-stream"));
-}
-
-async function runTimeoutScenario() {
-  const source = fs.readFileSync(SOURCE_PATH, "utf8")
-    .replace("const RESPONSE_IDLE_TIMEOUT_MS = 300_000;", "const RESPONSE_IDLE_TIMEOUT_MS = 100;");
-  assert.match(source, /RESPONSE_IDLE_TIMEOUT_MS/);
 }
 
 (async () => {
@@ -180,7 +181,7 @@ async function runTimeoutScenario() {
   await runScenario({ finalDelay: 150, replaceAssistant: true, expectText: "这是一个完整项目" });
   await runScenario({ finalDelay: 150, markerDelay: 120, expectText: "这是一个完整项目" });
   await runScenario({ finalDelay: 150, expectText: "这是一个完整项目" });
-  await runTimeoutScenario();
+  await runScenario({ finalDelay: 0, withAssistant: false });
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
