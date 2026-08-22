@@ -49,7 +49,8 @@ async def _run() -> int:
 
 def _parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
-        description="Open an interactive console backed by the local Web LLM Broker."
+        description="Open an interactive console backed by the local Web LLM Broker.",
+        epilog="Management command: web-llm-bridge install --skills",
     )
 
 

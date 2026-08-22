@@ -66,6 +66,14 @@ def manual_main(argv: Sequence[str] | None = None) -> int:
     from .interactive import main
 
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "install":
+        from .skill_install import main as install_main
+
+        return install_main(arguments[1:])
+    if not arguments or any(argument in {"-h", "--help"} for argument in arguments):
+        from .skill_install import warn_if_stale
+
+        warn_if_stale()
     if not any(argument in {"-h", "--help"} for argument in arguments):
         ensure_broker()
     return main(arguments)

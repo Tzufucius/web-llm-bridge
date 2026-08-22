@@ -7,7 +7,7 @@ name = "web-llm-bridge"
 version = "0.1.0"
 description = "A local browser bridge for supported LLM web applications"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 license = "AGPL-3.0-only"
 authors = [{ name = "web-llm-bridge contributors" }]
 dependencies = [
@@ -30,3 +30,6 @@ web-llm-broker = "web_llm_bridge.broker.server:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["web_llm_bridge*"]
+
+[tool.setuptools.package-data]
+web_llm_bridge = ["_bundled_skills/**/*.md"]
