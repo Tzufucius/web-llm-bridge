@@ -128,7 +128,12 @@ class ChatGPTSession:
             LOGGER.info("已绑定 ChatGPT 标签页")
             return session
         except ChatGPTBridgeError:
-            # 保留 headed 浏览器窗口，方便用户完成登录或检查页面状态。
+            # 页面未能完成绑定时没有可交还给调用方的 Session，主动清理
+            # Playwright 驱动，避免进程退出时遗留子进程。若已绑定成功，
+            # chat() 超时则由调用方保留 Session 和浏览器窗口供检查。
+            if context is not None:
+                await context.close()
+            await playwright.stop()
             raise
         except PlaywrightError as exc:
             if context is not None:
