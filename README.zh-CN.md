@@ -143,7 +143,16 @@ web-llm-agent list-sessions --json
 
 ## Agent Skill
 
-Web LLM Bridge 附带仓库内维护的 Agent Skill，用于指导兼容的本地 Agent 何时以及如何通过 Bridge 咨询 Web LLM。详见 [skills/web-llm-bridge/SKILL.md](skills/web-llm-bridge/SKILL.md)。
+Web LLM Bridge 附带可选的 Agent Skill，用于指导兼容的本地 Agent 何时以及如何通过 `web-llm-agent` 咨询 Web LLM。不安装 Skill 也不影响 CLI 使用。
+
+可为当前项目或当前用户安装：
+
+```console
+web-llm-bridge install --skills
+web-llm-bridge install --skills -g
+```
+
+canonical 源码位于 [`skills/`](skills/)。修改后运行 `python scripts/sync_skill_bundle.py` 重新生成打包镜像。详见 [skills/web-llm-bridge/SKILL.md](skills/web-llm-bridge/SKILL.md)。
 
 ## 支持的 Provider
 

@@ -143,7 +143,16 @@ The bridge avoids automatically resending prompts when submission state is uncer
 
 ## Agent Skill
 
-Web LLM Bridge ships a repository-maintained Agent Skill that teaches compatible local agents when and how to consult a Web LLM through the bridge. See [skills/web-llm-bridge/SKILL.md](skills/web-llm-bridge/SKILL.md).
+Web LLM Bridge ships an optional Agent Skill that teaches compatible local agents when and how to consult a Web LLM through `web-llm-agent`. The CLI works without it.
+
+Install it for the current project or user:
+
+```console
+web-llm-bridge install --skills
+web-llm-bridge install --skills -g
+```
+
+The canonical source is [`skills/`](skills/); after editing it, regenerate the packaged mirror with `python scripts/sync_skill_bundle.py`. See [skills/web-llm-bridge/SKILL.md](skills/web-llm-bridge/SKILL.md).
 
 ## Supported Providers
 

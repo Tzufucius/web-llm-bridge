@@ -4,5 +4,6 @@
 
 - `manual_console.py`：自动启动或复用 Broker，然后进入面向人类用户的交互控制台，可直接选择 Session、发送消息和读取历史；
 - `agent_cli.py`：自动启动或复用 Broker，然后执行一次面向 Agent 的 CLI 命令。
+- `sync_skill_bundle.py`：将 `skills/web-llm-bridge/` 的 Markdown 源同步到 Python package 的 bundled mirror，不启动 Broker。
 
 两个入口的帮助、参数说明和交互提示统一使用英文。浏览器扩展仍需由用户显式加载并登录。

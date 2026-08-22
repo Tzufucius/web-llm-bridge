@@ -30,3 +30,6 @@ web-llm-broker = "web_llm_bridge.broker.server:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["web_llm_bridge*"]
+
+[tool.setuptools.package-data]
+web_llm_bridge = ["_bundled_skills/**/*.md"]
