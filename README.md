@@ -9,7 +9,9 @@ Manifest V3 Extension
     ↓
 ws://127.0.0.1:8765
     ↓
-Python ChatGPTSession
+Persistent Broker (:8765 / :8766)
+    ↓
+Human CLI / Agent CLI
 ```
 
 Python 不启动或接管浏览器。扩展不读取、保存密码、Cookie 或 Token，登录请直接在用户自己的 Chrome/Edge 中完成。
@@ -25,6 +27,26 @@ python -c "import sys, websockets; print(sys.executable); print(websockets.__ver
 ```
 
 `websockets` 必须为 14.0 或更高版本。若诊断命令显示版本过低，请使用同一个 `python` 解释器升级，避免 Bridge 与升级命令使用不同环境。
+
+## Persistent Broker 与 Session 列表
+
+Broker 是唯一拥有 Extension WebSocket `127.0.0.1:8765` 的进程：
+
+```powershell
+python tools/chatgpt_web_bridge/chatgpt_broker.py serve
+```
+
+Agent CLI 使用 `127.0.0.1:8766` 的 NDJSON 接口：
+
+```powershell
+python tools/chatgpt_web_bridge/chatgpt_agent_cli.py list-sessions --json
+python tools/chatgpt_web_bridge/chatgpt_agent_cli.py open --session-id SESSION_ID --json
+python tools/chatgpt_web_bridge/chatgpt_agent_cli.py open --new --json
+```
+
+已使用过的 Conversation 只保存元数据到 `tools/chatgpt_web_bridge/sessions/`：Session ID、Conversation URL、时间、sequence 和 active 状态。该目录中的运行时 JSON 默认被 Git 忽略，不保存 Prompt、回复、Cookie、Token 或完整历史。`open --new` 会创建新的 Session ID，旧记录仍保留在列表中。
+
+`list_sessions` 是只读接口，按最近更新时间倒序返回。`open --session-id` 会按保存的 Conversation URL 重新 attach，不会重新提交历史消息。
 
 ## 加载扩展
 
