@@ -1054,6 +1054,9 @@ async function chat(text, requestId) {
   const beforeUserCount = userCount();
   const baselineAssistant = findLastAssistant();
   const startedAt = performance.now();
+  // A newly opened tab may spend several seconds before its prompt or send
+  // button is usable. Report that wait as activity instead of appearing idle.
+  sendChatProgress(requestId, "working", startedAt, startedAt);
   await sendText(text);
   await waitForUserSubmitted(
     beforeUserCount,
