@@ -25,8 +25,9 @@ const COMPLETION_CONFIRMATION_MS = 3_000;
 const POLL_INTERVAL_MS = 200;
 const RESPONSE_IDLE_TIMEOUT_MS = 300_000;
 const PROGRESS_INTERVAL_MS = 1_500;
-const BUTTON_READY_TIMEOUT_MS = 5_000;
-const SUBMIT_TIMEOUT_MS = 10_000;
+const PAGE_READY_TIMEOUT_MS = 30_000;
+const BUTTON_READY_TIMEOUT_MS = 30_000;
+const SUBMISSION_CONFIRMATION_TIMEOUT_MS = 60_000;
 const HISTORY_LOAD_TIMEOUT_MS = 60_000;
 const HISTORY_POLL_INTERVAL_MS = 250;
 const HISTORY_NO_GROWTH_ROUNDS = 3;
@@ -212,8 +213,23 @@ function isEnabled(button) {
   );
 }
 
-async function waitForEnabledButton() {
-  const deadline = performance.now() + BUTTON_READY_TIMEOUT_MS;
+async function waitForPromptReady(timeoutMs = PAGE_READY_TIMEOUT_MS) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const prompt = findVisible(PROMPT_SELECTORS);
+    if (prompt) {
+      return prompt;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new ContentBridgeError(
+    "PROMPT_NOT_FOUND",
+    "ChatGPT 页面仍在加载，输入框尚未就绪",
+  );
+}
+
+async function waitForEnabledButton(timeoutMs = BUTTON_READY_TIMEOUT_MS) {
+  const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     const button = findVisible(SEND_BUTTON_SELECTORS);
     if (button && isEnabled(button)) {
@@ -808,23 +824,80 @@ async function sendText(text) {
   if (isGenerating()) {
     throw new ContentBridgeError("BUSY", "ChatGPT 当前仍在生成回复");
   }
-  const prompt = getPrompt();
-  writePrompt(prompt, text);
-  const button = await waitForEnabledButton();
-  button.click();
+  const deadline = performance.now() + PAGE_READY_TIMEOUT_MS;
+  let lastError = null;
+  while (performance.now() < deadline) {
+    const remaining = Math.max(1, deadline - performance.now());
+    try {
+      const prompt = await waitForPromptReady(remaining);
+      writePrompt(prompt, text);
+      const button = await waitForEnabledButton(
+        Math.min(remaining, BUTTON_READY_TIMEOUT_MS),
+      );
+      button.click();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (
+        !["PROMPT_NOT_FOUND", "SEND_BUTTON_NOT_FOUND", "INPUT_FAILED"].includes(
+          error?.code,
+        )
+      ) {
+        throw error;
+      }
+      await sleep(POLL_INTERVAL_MS);
+    }
+  }
+  throw (
+    lastError ||
+    new ContentBridgeError(
+      "PAGE_NOT_READY",
+      "ChatGPT 页面在限定时间内未完成加载",
+    )
+  );
 }
 
-async function waitForUserSubmitted(oldCount) {
-  const deadline = performance.now() + SUBMIT_TIMEOUT_MS;
+async function waitForUserSubmitted(
+  oldCount,
+  sentText,
+  baselineAssistant,
+  requestId,
+  startedAt,
+) {
+  const deadline = performance.now() + SUBMISSION_CONFIRMATION_TIMEOUT_MS;
+  const initialRevision = responseActivityRevision;
+  let lastProgressAt = startedAt;
+  let lastActivityAt = startedAt;
+  sendChatProgress(requestId, "working", startedAt, lastActivityAt);
   while (performance.now() < deadline) {
     if (userCount() > oldCount) {
       return;
+    }
+    const prompt = findVisible(PROMPT_SELECTORS);
+    const promptCleared =
+      typeof sentText === "string" &&
+      prompt &&
+      normalizeText(readPromptText(prompt)) === "";
+    const generating = isGenerating();
+    const currentAssistant = findLastAssistant();
+    const assistantChanged =
+      currentAssistant !== null && currentAssistant !== baselineAssistant;
+    if (promptCleared || generating || assistantChanged) {
+      return;
+    }
+    const now = performance.now();
+    if (responseActivityRevision !== initialRevision) {
+      lastActivityAt = now;
+    }
+    if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+      sendChatProgress(requestId, "working", startedAt, lastActivityAt);
+      lastProgressAt = now;
     }
     await sleep(POLL_INTERVAL_MS);
   }
   throw new ContentBridgeError(
     "SEND_FAILED",
-    "消息点击发送后未确认提交成功",
+    "ChatGPT 页面在 60 秒内未确认消息提交，可能仍在加载",
   );
 }
 
@@ -982,7 +1055,13 @@ async function chat(text, requestId) {
   const baselineAssistant = findLastAssistant();
   const startedAt = performance.now();
   await sendText(text);
-  await waitForUserSubmitted(beforeUserCount);
+  await waitForUserSubmitted(
+    beforeUserCount,
+    text,
+    baselineAssistant,
+    requestId,
+    startedAt,
+  );
   sendChatProgress(requestId, "submitted", startedAt, startedAt);
   return {
     text: await waitForResponseComplete(requestId, baselineAssistant, startedAt),
