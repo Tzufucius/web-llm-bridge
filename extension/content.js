@@ -25,6 +25,48 @@ const HISTORY_POLL_INTERVAL_MS = 250;
 const HISTORY_NO_GROWTH_ROUNDS = 3;
 const MAX_HISTORY_LIMIT = 1_000;
 
+// ChatGPT may render tool calls and reasoning status outside the message
+// container. Keep these selectors semantic and bounded so unrelated page
+// animations do not keep a stalled response alive forever.
+const TOOL_ACTIVITY_SELECTORS = [
+  '[data-testid*="tool"]',
+  '[data-testid*="function"]',
+  '[data-testid*="browser"]',
+  '[data-testid*="search"]',
+  '[data-testid*="code"]',
+  '[data-testid*="thinking"]',
+  '[aria-label*="tool" i]',
+  '[aria-label*="function" i]',
+  '[aria-label*="browser" i]',
+  '[aria-label*="search" i]',
+  '[aria-label*="code" i]',
+  '[class*="tool"]',
+  '[class*="thinking"]',
+];
+const STATUS_ACTIVITY_SELECTORS = [
+  '[aria-live]',
+  '[role="status"]',
+  '[role="log"]',
+  '[aria-busy="true"]',
+  '[data-testid*="status"]',
+  '[data-testid*="progress"]',
+  '[data-testid*="loading"]',
+  '[data-status]',
+];
+const RESPONSE_ACTIVITY_SELECTORS = [
+  "main",
+  '[role="main"]',
+  MESSAGE_SELECTOR,
+  ...TOOL_ACTIVITY_SELECTORS,
+  ...STATUS_ACTIVITY_SELECTORS,
+];
+const RESPONSE_SNAPSHOT_SELECTORS = [
+  ...TOOL_ACTIVITY_SELECTORS,
+  ...STATUS_ACTIVITY_SELECTORS,
+];
+const TOOL_ACTIVITY_TEXT_PATTERN =
+  /(tool|function|browser|search|code|调用工具|工具调用|搜索|浏览|代码执行|正在思考|思考中|分析中)/i;
+
 class ContentBridgeError extends Error {
   constructor(code, message) {
     super(message);
@@ -594,31 +636,106 @@ function scheduleVisibleCapture() {
   }, 100);
 }
 
-const RESPONSE_ACTIVITY_ANCESTORS = [
-  "main",
-  '[role="main"]',
-  MESSAGE_SELECTOR,
-  "[aria-live]",
-  '[data-testid*="thinking"]',
-  '[data-testid*="status"]',
-  '[data-testid*="response"]',
-];
-
-function isResponseActivityMutation(record) {
-  const target =
-    record.target?.nodeType === Node.ELEMENT_NODE
-      ? record.target
-      : record.target?.parentElement;
-  if (!target) {
+function matchesAnySelector(node, selectors) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) {
     return false;
   }
-  return RESPONSE_ACTIVITY_ANCESTORS.some((selector) => {
+  return selectors.some((selector) => {
     try {
-      return Boolean(target.closest(selector));
+      return node.matches(selector);
     } catch (_error) {
       return false;
     }
   });
+}
+
+function isResponseActivityNode(node) {
+  if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+    return false;
+  }
+  if (matchesAnySelector(node, RESPONSE_ACTIVITY_SELECTORS)) {
+    return true;
+  }
+  return RESPONSE_ACTIVITY_SELECTORS.some((selector) => {
+    try {
+      return Boolean(node.closest(selector));
+    } catch (_error) {
+      return false;
+    }
+  });
+}
+
+function isResponseActivityMutation(record) {
+  const candidates = [record.target];
+  for (const node of record.addedNodes || []) {
+    candidates.push(node);
+  }
+  for (const node of record.removedNodes || []) {
+    candidates.push(node);
+  }
+  return candidates.some((node) => {
+    const element =
+      node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    return isResponseActivityNode(element);
+  });
+}
+
+function getActivityNodeText(node) {
+  const text = node?.innerText || node?.textContent || "";
+  return normalizeText(text).slice(0, 1_000);
+}
+
+function getActivityNodeSignature(node) {
+  const attributes = [
+    "data-testid",
+    "data-status",
+    "data-state",
+    "aria-label",
+    "aria-live",
+    "aria-busy",
+  ]
+    .map((name) => `${name}=${node.getAttribute(name) || ""}`)
+    .join("|");
+  return [
+    node.tagName,
+    attributes,
+    `children=${node.childElementCount}`,
+    `text=${getActivityNodeText(node)}`,
+  ].join(";");
+}
+
+function collectResponseActivityNodes() {
+  const nodes = new Set();
+  for (const selector of RESPONSE_SNAPSHOT_SELECTORS) {
+    try {
+      for (const node of document.querySelectorAll(selector)) {
+        nodes.add(node);
+      }
+    } catch (_error) {
+      // A selector is optional across ChatGPT deployments.
+    }
+  }
+  return [...nodes];
+}
+
+function readResponseActivitySnapshot() {
+  const nodes = collectResponseActivityNodes();
+  const signatures = nodes.map(getActivityNodeSignature).sort();
+  const toolCall = nodes.some((node) => {
+    if (matchesAnySelector(node, TOOL_ACTIVITY_SELECTORS)) {
+      return true;
+    }
+    if (!matchesAnySelector(node, STATUS_ACTIVITY_SELECTORS)) {
+      return false;
+    }
+    const label = [
+      node.getAttribute("aria-label") || "",
+      node.getAttribute("data-status") || "",
+      getActivityNodeText(node),
+    ].join(" ");
+    return TOOL_ACTIVITY_TEXT_PATTERN.test(label);
+  });
+  return { signature: signatures.join("\n"), toolCall };
 }
 
 function startTurnObserver() {
@@ -696,6 +813,8 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
   let lastProgressAt = startedAt;
   let lastPhase = "thinking";
   let observedActivity = false;
+  let activityKind = "thinking";
+  let lastActivitySnapshot = readResponseActivitySnapshot();
 
   sendChatProgress(requestId, "thinking", startedAt, lastActivityAt);
 
@@ -704,12 +823,17 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
     const assistant = findLastAssistant();
     const currentText = (assistant?.innerText || "").trim();
     const revisionChanged = responseActivityRevision !== lastRevision;
+    const activitySnapshot = readResponseActivitySnapshot();
+    const snapshotChanged =
+      activitySnapshot.signature !== lastActivitySnapshot.signature;
 
-    if (revisionChanged || currentText !== lastText) {
+    if (revisionChanged || currentText !== lastText || snapshotChanged) {
       lastActivityAt = now;
       lastRevision = responseActivityRevision;
       observedActivity = true;
+      activityKind = activitySnapshot.toolCall ? "tool_call" : "working";
     }
+    lastActivitySnapshot = activitySnapshot;
 
     const assistantChanged = assistant !== lastAssistantNode;
     if (assistantChanged) {
@@ -722,9 +846,12 @@ async function waitForResponseComplete(requestId, baselineAssistant, startedAt) 
 
     const phase = currentText
       ? "streaming"
-      : observedActivity && now - lastActivityAt <= PROGRESS_INTERVAL_MS
-        ? "working"
-        : "thinking";
+      : activityKind === "tool_call" &&
+          now - lastActivityAt <= PROGRESS_INTERVAL_MS
+        ? "tool_call"
+        : observedActivity && now - lastActivityAt <= PROGRESS_INTERVAL_MS
+          ? "working"
+          : "thinking";
     if (
       phase !== lastPhase ||
       now - lastProgressAt >= PROGRESS_INTERVAL_MS
