@@ -491,11 +491,18 @@ class ChatGPTSession:
             raise ChatGPTBridgeError("消息不能为空", "INPUT_FAILED")
         async with self._chat_lock:
             self._ensure_open()
-            result = await self._request(
-                "chat",
-                {"tab_id": self._tab_id, "text": text},
-                timeout_ms=RESPONSE_TIMEOUT_MS,
-            )
+            try:
+                result = await self._request(
+                    "chat",
+                    {"tab_id": self._tab_id, "text": text},
+                    timeout_ms=RESPONSE_TIMEOUT_MS,
+                )
+            except ChatGPTBridgeError as exc:
+                if exc.code == "TAB_CLOSED" and self._reopen_on_closed:
+                    # The prompt may already have been submitted. Rebind only;
+                    # never send the same text a second time automatically.
+                    await self._reopen_current_tab()
+                raise
             answer = result.get("text")
             if not isinstance(answer, str) or not answer.strip():
                 raise ChatGPTBridgeError("Extension 返回了空回复", "INTERNAL_ERROR")
