@@ -16,17 +16,29 @@ playwright install chromium
 
 ## 运行
 
+建议先执行一次登录初始化脚本：
+
+```bash
+python tools/chatgpt_web_bridge/chatgpt_web_login.py
+```
+
+脚本会打开可见浏览器。请手动完成 ChatGPT 登录，确认输入框出现后按 Enter 结束脚本。
+它不会读取或保存账号、密码、Cookie、Token；登录态由 Chromium Profile 保存。
+
+随后运行消息桥接：
+
 ```bash
 python tools/chatgpt_web_bridge/chatgpt_web_bridge.py
 ```
 
-浏览器会以可见模式启动。首次运行时，请在打开的 ChatGPT 页面中手动登录。登录状态会保存在：
+浏览器会以可见模式启动，登录状态会保存在：
 
 ```text
 tools/chatgpt_web_bridge/chatgpt_browser_profile/
 ```
 
 该目录包含浏览器本地数据，已加入 Git 忽略规则，不应手动提交或分享。
+登录脚本还会在该目录写入不含敏感凭据的 `session_metadata.json`，用于提示桥接脚本复用已初始化的 Profile。
 
 ## Python 接口
 

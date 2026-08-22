@@ -35,6 +35,7 @@ from playwright.async_api import (
 # =========================
 
 PROFILE_DIR: Final[Path] = Path(__file__).resolve().parent / "chatgpt_browser_profile"
+SESSION_METADATA_FILE: Final[Path] = PROFILE_DIR / "session_metadata.json"
 HEADLESS: Final[bool] = False
 BROWSER_CHANNEL: Final[str | None] = None
 PAGE_LOAD_TIMEOUT_MS: Final[int] = 60_000
@@ -109,6 +110,12 @@ class ChatGPTSession:
 
             context = await playwright.chromium.launch_persistent_context(**launch_kwargs)
             context.set_default_timeout(PAGE_LOAD_TIMEOUT_MS)
+            if SESSION_METADATA_FILE.exists():
+                LOGGER.info("发现已保存的 ChatGPT 登录 Profile")
+            else:
+                LOGGER.warning(
+                    "未发现登录脚本生成的状态信息；如未登录，请先运行 chatgpt_web_login.py"
+                )
 
             page = await cls._select_page(context)
             session = cls(playwright, context, page)
