@@ -33,21 +33,21 @@ Chrome：
 4. 选择本目录下的 `extension/`。
 
 Edge 使用同样步骤，入口为 `edge://extensions`。
+扩展最低要求 Chrome/Edge 120。
 
 扩展没有 popup。点击工具栏扩展图标会立即尝试连接本地 Python Bridge。
 
 ## 运行 Bridge
 
-先启动 Python：
-
 ```bash
 python tools/chatgpt_web_bridge/chatgpt_web_bridge.py
 ```
 
-程序会监听 `127.0.0.1:8765` 并等待扩展连接。随后在命令行输入 ChatGPT URL，
-Bridge 会要求扩展创建并绑定一个新的 ChatGPT 标签页。
+程序先提示输入 ChatGPT URL。输入后，`ChatGPTSession.open()` 启动并监听
+`127.0.0.1:8765`，等待扩展完成握手，再由扩展创建并绑定一个新的 ChatGPT 标签页。
 
-也可以先打开浏览器和扩展，再启动 Python；扩展会自动重连。若未连接，点击工具栏扩展图标即可再次尝试。
+建议先保持 Chrome/Edge 和扩展运行，再执行命令。扩展会自动重连；若 Python Bridge
+尚未运行或曾因协议冲突暂停重连，点击工具栏扩展图标即可再次尝试。
 
 ## Python 接口
 
@@ -72,3 +72,6 @@ answer = await session.chat("你好")
 
 Bridge 使用结构化错误码处理扩展未连接、标签页关闭、输入框失效、发送按钮失效、页面生成中和回复超时等情况。
 Python 与扩展只允许一个 WebSocket 客户端，监听地址固定为本机回环地址，不提供远程访问接口。
+
+本工具不再使用 Playwright、独立浏览器 Profile 或手动登录脚本。扩展不读取或保存密码、Cookie、Token；
+登录请直接在用户自己的 Chrome/Edge 中完成。页面历史消息受 ChatGPT DOM 虚拟化影响，未加载到 DOM 的早期消息可能无法读取。

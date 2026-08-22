@@ -13,10 +13,12 @@ const STOP_BUTTON_SELECTORS = [
 ];
 const MESSAGE_SELECTOR = "[data-message-author-role]";
 const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+const USER_SELECTOR = '[data-message-author-role="user"]';
 const STABLE_TIME_MS = 1_500;
 const POLL_INTERVAL_MS = 200;
 const RESPONSE_TIMEOUT_MS = 180_000;
 const BUTTON_READY_TIMEOUT_MS = 5_000;
+const SUBMIT_TIMEOUT_MS = 10_000;
 
 class ContentBridgeError extends Error {
   constructor(code, message) {
@@ -87,7 +89,7 @@ function dispatchInput(prompt, text) {
   );
 }
 
-function setFormValue(prompt, text) {
+function setFormValue(prompt, text, emitInput = true) {
   const prototype = Object.getPrototypeOf(prompt);
   const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
   if (descriptor?.set) {
@@ -95,20 +97,32 @@ function setFormValue(prompt, text) {
   } else {
     prompt.value = text;
   }
-  dispatchInput(prompt, text);
+  if (emitInput) {
+    dispatchInput(prompt, text);
+  }
+}
+
+function selectPromptContents(prompt) {
+  const range = document.createRange();
+  range.selectNodeContents(prompt);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return range;
 }
 
 function clearContentEditable(prompt) {
   prompt.focus();
-  const selected = document.execCommand("selectAll", false);
-  if (!selected) {
-    const range = document.createRange();
-    range.selectNodeContents(prompt);
+  const range = selectPromptContents(prompt);
+  const deleted = document.execCommand("delete", false);
+  if (!deleted) {
+    range.deleteContents();
+    range.collapse(true);
     const selection = window.getSelection();
     selection.removeAllRanges();
     selection.addRange(range);
+    dispatchInput(prompt, "");
   }
-  document.execCommand("delete", false);
 }
 
 function insertContentEditableText(prompt, text) {
@@ -128,9 +142,6 @@ function insertContentEditableText(prompt, text) {
     dispatchInput(prompt, text);
     inserted = true;
   }
-  if (inserted) {
-    dispatchInput(prompt, text);
-  }
   return inserted;
 }
 
@@ -138,7 +149,7 @@ function writePrompt(prompt, text) {
   if (prompt.isContentEditable) {
     insertContentEditableText(prompt, text);
   } else if ("value" in prompt) {
-    setFormValue(prompt, "");
+    setFormValue(prompt, "", false);
     setFormValue(prompt, text);
   } else {
     throw new ContentBridgeError("INPUT_FAILED", "ChatGPT 输入框不支持文本写入");
@@ -180,6 +191,10 @@ function assistantCount() {
   return document.querySelectorAll(ASSISTANT_SELECTOR).length;
 }
 
+function userCount() {
+  return document.querySelectorAll(USER_SELECTOR).length;
+}
+
 function getLastAssistant() {
   const nodes = document.querySelectorAll(ASSISTANT_SELECTOR);
   if (nodes.length === 0) {
@@ -215,6 +230,20 @@ async function sendText(text) {
   writePrompt(prompt, text);
   const button = await waitForEnabledButton();
   button.click();
+}
+
+async function waitForUserSubmitted(oldCount) {
+  const deadline = performance.now() + SUBMIT_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    if (userCount() > oldCount) {
+      return;
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw new ContentBridgeError(
+    "SEND_FAILED",
+    "消息点击发送后未确认提交成功",
+  );
 }
 
 async function waitForNewAssistant(oldCount) {
@@ -265,9 +294,11 @@ async function chat(text) {
   if (typeof text !== "string" || !text.trim()) {
     throw new ContentBridgeError("INPUT_FAILED", "消息不能为空");
   }
-  const beforeCount = assistantCount();
+  const beforeUserCount = userCount();
+  const beforeAssistantCount = assistantCount();
   await sendText(text);
-  await waitForNewAssistant(beforeCount);
+  await waitForUserSubmitted(beforeUserCount);
+  await waitForNewAssistant(beforeAssistantCount);
   const finalText = await waitForResponseComplete();
   return { text: finalText };
 }

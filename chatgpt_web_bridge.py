@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Final
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -36,7 +37,11 @@ PROTOCOL_VERSION: Final[int] = 1
 EXTENSION_CONNECT_TIMEOUT_MS: Final[int] = 30_000
 RPC_TIMEOUT_MS: Final[int] = 30_000
 RESPONSE_TIMEOUT_MS: Final[int] = 180_000
+MAX_WS_MESSAGE_SIZE: Final[int] = 8 * 1024 * 1024
 ALLOWED_HOSTS: Final[set[str]] = {"chatgpt.com", "www.chatgpt.com"}
+ALLOWED_EXTENSION_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^chrome-extension://[a-p]{32}$"
+)
 
 LOGGER = logging.getLogger("chatgpt_web_bridge")
 
@@ -49,12 +54,15 @@ LOGGER = logging.getLogger("chatgpt_web_bridge")
 ERROR_MESSAGES: Final[dict[str, str]] = {
     "EXTENSION_NOT_CONNECTED": "尚未检测到 ChatGPT Web Bridge 浏览器扩展",
     "EXTENSION_ALREADY_CONNECTED": "已有浏览器扩展连接到 Bridge",
+    "INVALID_ORIGIN": "WebSocket 连接来源不是允许的浏览器扩展",
+    "INCOMPATIBLE_PROTOCOL": "浏览器扩展协议版本不兼容",
     "INVALID_URL": "仅支持 https://chatgpt.com 或 https://www.chatgpt.com",
     "PAGE_NOT_READY": "ChatGPT 页面尚未准备完成",
     "TAB_CLOSED": "绑定的 ChatGPT 标签页已关闭",
     "CONTENT_SCRIPT_UNAVAILABLE": "ChatGPT 内容脚本不可用",
     "PROMPT_NOT_FOUND": "未找到 ChatGPT 输入框",
     "INPUT_FAILED": "文本未成功写入 ChatGPT 输入框",
+    "SEND_FAILED": "消息点击发送后未确认提交成功",
     "SEND_BUTTON_NOT_FOUND": "未找到可靠的 ChatGPT 发送按钮",
     "BUSY": "ChatGPT 当前仍在生成回复",
     "RESPONSE_TIMEOUT": "等待 ChatGPT 回复超时",
@@ -111,6 +119,8 @@ class _BridgeTransport:
                 BRIDGE_HOST,
                 BRIDGE_PORT,
                 ping_interval=None,
+                max_size=MAX_WS_MESSAGE_SIZE,
+                origins=[ALLOWED_EXTENSION_ORIGIN_PATTERN],
             )
         except OSError as exc:
             raise ChatGPTBridgeError(
@@ -251,8 +261,15 @@ class _BridgeTransport:
                     await websocket.close()
                     return
                 self._client = websocket
+                await self._send_json(
+                    websocket,
+                    {
+                        "type": "hello_ack",
+                        "protocol_version": PROTOCOL_VERSION,
+                    },
+                )
                 self._client_ready.set()
-            LOGGER.info("浏览器扩展已连接")
+            LOGGER.info("Extension handshake completed")
 
             async for raw_message in websocket:
                 await self._handle_message(self._decode_message(raw_message))

@@ -3,7 +3,7 @@
   "name": "ChatGPT Web Bridge",
   "version": "0.2.0",
   "description": "通过 localhost WebSocket 将 ChatGPT Web DOM 提供给本地 Bridge。",
-  "minimum_chrome_version": "116",
+  "minimum_chrome_version": "120",
   "background": {
     "service_worker": "service_worker.js"
   },

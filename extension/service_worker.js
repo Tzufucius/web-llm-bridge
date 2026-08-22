@@ -11,6 +11,8 @@ let socket = null;
 let reconnectTimer = null;
 let heartbeatTimer = null;
 let reconnectDelay = RECONNECT_DELAY_MS;
+let handshakeReady = false;
+let reconnectSuppressed = false;
 
 function bridgeError(code, message) {
   const error = new Error(message);
@@ -42,14 +44,14 @@ function clearHeartbeatTimer() {
 function startHeartbeat() {
   clearHeartbeatTimer();
   heartbeatTimer = setInterval(() => {
-    if (socket?.readyState === WebSocket.OPEN) {
+    if (handshakeReady && socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "ping" }));
     }
   }, HEARTBEAT_INTERVAL_MS);
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer !== null) {
+  if (reconnectSuppressed || reconnectTimer !== null) {
     return;
   }
   reconnectTimer = setTimeout(() => {
@@ -59,7 +61,14 @@ function scheduleReconnect() {
   reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY_MS);
 }
 
-function connectBridge() {
+function connectBridge(manual = false) {
+  if (manual) {
+    reconnectSuppressed = false;
+    reconnectDelay = RECONNECT_DELAY_MS;
+  }
+  if (reconnectSuppressed && !manual) {
+    return;
+  }
   if (
     socket &&
     (socket.readyState === WebSocket.CONNECTING ||
@@ -71,14 +80,13 @@ function connectBridge() {
   clearReconnectTimer();
   const candidate = new WebSocket(BRIDGE_URL);
   socket = candidate;
+  handshakeReady = false;
 
   candidate.addEventListener("open", () => {
     if (socket !== candidate) {
       candidate.close();
       return;
     }
-    reconnectDelay = RECONNECT_DELAY_MS;
-    startHeartbeat();
     candidate.send(
       JSON.stringify({
         type: "hello",
@@ -95,7 +103,36 @@ function connectBridge() {
       return;
     }
 
-    if (message.type === "request") {
+    if (message.type === "hello_ack") {
+      if (message.protocol_version !== PROTOCOL_VERSION) {
+        reconnectSuppressed = true;
+        handshakeReady = false;
+        clearHeartbeatTimer();
+        candidate.close();
+        return;
+      }
+      handshakeReady = true;
+      reconnectDelay = RECONNECT_DELAY_MS;
+      startHeartbeat();
+      return;
+    }
+
+    if (message.type === "error") {
+      const errorCode = message.error?.code || message.code;
+      if (
+        errorCode === "EXTENSION_ALREADY_CONNECTED" ||
+        errorCode === "INCOMPATIBLE_PROTOCOL"
+      ) {
+        reconnectSuppressed = true;
+        handshakeReady = false;
+        clearHeartbeatTimer();
+        clearReconnectTimer();
+        candidate.close();
+      }
+      return;
+    }
+
+    if (message.type === "request" && handshakeReady) {
       void handleRequest(message);
     }
   });
@@ -109,8 +146,11 @@ function connectBridge() {
       return;
     }
     socket = null;
+    handshakeReady = false;
     clearHeartbeatTimer();
-    scheduleReconnect();
+    if (!reconnectSuppressed) {
+      scheduleReconnect();
+    }
   });
 }
 
@@ -257,7 +297,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.action.onClicked.addListener(() => {
-  connectBridge();
+  connectBridge(true);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
