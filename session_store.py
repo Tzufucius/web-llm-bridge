@@ -186,7 +186,23 @@ class SessionStore:
             return self.create(**incoming)
         existing = self.get(str(session_id))
         if existing is None:
-            return self.create(**{key: incoming[key] for key in ("session_id", "tab_id", "current_url") if key in incoming}, active=bool(incoming.get("active", True)))
+            if "tab_id" not in incoming or "current_url" not in incoming:
+                raise ValueError("tab_id 和 current_url 为必填字段")
+            now = _now()
+            records = self._load_records()
+            created = dict(incoming)
+            created.setdefault("version", SCHEMA_VERSION)
+            created.setdefault("created_at", now)
+            created.setdefault("updated_at", now)
+            created.setdefault("sequence", 0)
+            created["active"] = bool(created.get("active", True))
+            if created["active"]:
+                for item in records.values():
+                    item["active"] = False
+            records[str(session_id)] = self._normalise(created) or created
+            self._persist(records)
+            return dict(records[str(session_id)])
+        incoming.pop("session_id", None)
         return self.update(str(session_id), **incoming)
 
     def update(self, session_id: str, **fields: Any) -> dict[str, Any]:
@@ -194,7 +210,7 @@ class SessionStore:
         if session_id not in records:
             raise KeyError(session_id)
         record = records[session_id]
-        for key in ("tab_id", "current_url", "active"):
+        for key in ("tab_id", "current_url", "active", "sequence", "created_at"):
             if key in fields:
                 record[key] = bool(fields[key]) if key == "active" else fields[key]
         record["updated_at"] = _now()
