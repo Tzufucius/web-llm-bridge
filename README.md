@@ -18,10 +18,17 @@ Python 不启动或接管浏览器，也不读取密码、Cookie、Token。ChatG
 ## 安装 Python 依赖
 
 ```bash
-pip install websockets
+python -m pip install -r tools/chatgpt_web_bridge/requirements.txt
 ```
 
 本版本不再使用 Playwright，不需要 `playwright install chromium`。
+请使用启动 Bridge 的同一个 Python 环境安装依赖。可用以下命令确认解释器和版本：
+
+```powershell
+python -c "import sys, websockets; print(sys.executable); print(websockets.__version__)"
+```
+
+`websockets` 需要 14.0 或更高版本；如果版本过低，请在同一终端执行上述安装命令。
 
 ## 加载扩展
 

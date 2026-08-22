@@ -2,7 +2,7 @@
 
 安装依赖::
 
-    pip install websockets
+    python -m pip install -r tools/chatgpt_web_bridge/requirements.txt
 
 Python 只负责 localhost WebSocket RPC、Session 和 CLI；ChatGPT DOM 由
 ``extension/content.js`` 负责。浏览器登录状态完全由用户正常使用的
@@ -18,6 +18,8 @@ import re
 from typing import Any, Final
 from urllib.parse import urlparse
 from uuid import uuid4
+
+import websockets
 
 try:
     from websockets.asyncio.server import serve
@@ -38,6 +40,7 @@ EXTENSION_CONNECT_TIMEOUT_MS: Final[int] = 30_000
 RPC_TIMEOUT_MS: Final[int] = 30_000
 RESPONSE_TIMEOUT_MS: Final[int] = 180_000
 MAX_WS_MESSAGE_SIZE: Final[int] = 8 * 1024 * 1024
+MIN_WEBSOCKETS_VERSION: Final[tuple[int, int]] = (14, 0)
 ALLOWED_HOSTS: Final[set[str]] = {"chatgpt.com", "www.chatgpt.com"}
 ALLOWED_EXTENSION_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^chrome-extension://[a-p]{32}$"
@@ -69,6 +72,7 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "DOM_CHANGED": "ChatGPT 页面结构可能已经发生变化",
     "INTERNAL_ERROR": "ChatGPT Web Bridge 内部错误",
     "RPC_TIMEOUT": "等待浏览器扩展响应超时",
+    "DEPENDENCY_VERSION": "websockets 版本过低，请升级到 14.0 或更高版本",
 }
 
 
@@ -98,6 +102,22 @@ def _error_message(code: str, fallback: str | None = None) -> str:
 # =========================
 
 
+def _validate_websockets_version() -> None:
+    version_text = str(getattr(websockets, "__version__", "unknown"))
+    try:
+        major, minor = (int(part) for part in version_text.split(".")[:2])
+    except (TypeError, ValueError) as exc:
+        raise ChatGPTBridgeError(
+            f"{_error_message('DEPENDENCY_VERSION')} 当前版本：{version_text}",
+            "DEPENDENCY_VERSION",
+        ) from exc
+    if (major, minor) < MIN_WEBSOCKETS_VERSION:
+        raise ChatGPTBridgeError(
+            f"{_error_message('DEPENDENCY_VERSION')} 当前版本：{version_text}",
+            "DEPENDENCY_VERSION",
+        )
+
+
 class _BridgeTransport:
     """单个 Extension WebSocket client 的 JSON RPC transport。"""
 
@@ -113,6 +133,7 @@ class _BridgeTransport:
     async def start(self) -> None:
         if self._server is not None:
             return
+        _validate_websockets_version()
         try:
             self._server = await serve(
                 self._handle_connection,
