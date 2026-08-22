@@ -1135,10 +1135,10 @@ async def main() -> None:
                 print(f"ChatGPT > {(response.get('result') or {}).get('text', '')}")
             else:
                 print(f"错误：{response.get('error')}")
-    except (ChatGPTBridgeError, EOFError, KeyboardInterrupt) as exc:
+    except (ChatGPTBridgeError, ConnectionError, OSError, EOFError, KeyboardInterrupt) as exc:
         if isinstance(exc, ChatGPTBridgeError):
             LOGGER.error("%s", exc)
-            print(f"错误：{exc}")
+        print(f"错误：{exc}")
 
 
 if __name__ == "__main__":
