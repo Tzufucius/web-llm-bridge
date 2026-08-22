@@ -39,6 +39,7 @@ PROTOCOL_VERSION: Final[int] = 1
 EXTENSION_CONNECT_TIMEOUT_MS: Final[int] = 30_000
 RPC_TIMEOUT_MS: Final[int] = 30_000
 RESPONSE_TIMEOUT_MS: Final[int] = 180_000
+HISTORY_RPC_TIMEOUT_MS: Final[int] = 70_000
 MAX_WS_MESSAGE_SIZE: Final[int] = 8 * 1024 * 1024
 MIN_WEBSOCKETS_VERSION: Final[tuple[int, int]] = (14, 0)
 DEFAULT_HISTORY_LIMIT: Final[int] = 5
@@ -452,12 +453,20 @@ class ChatGPTSession:
             return {"tab_id": self._tab_id, "limit": limit, "full": full}
 
         try:
-            result = await self._request("get_messages", request_params())
+            result = await self._request(
+                "get_messages",
+                request_params(),
+                timeout_ms=HISTORY_RPC_TIMEOUT_MS,
+            )
         except ChatGPTBridgeError as exc:
             if exc.code != "TAB_CLOSED" or not self._reopen_on_closed:
                 raise
             await self._reopen_current_tab()
-            result = await self._request("get_messages", request_params())
+            result = await self._request(
+                "get_messages",
+                request_params(),
+                timeout_ms=HISTORY_RPC_TIMEOUT_MS,
+            )
         messages = result.get("messages")
         if not isinstance(messages, list):
             raise ChatGPTBridgeError("Extension 返回了无效消息列表", "INTERNAL_ERROR")
