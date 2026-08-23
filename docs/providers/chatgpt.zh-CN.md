@@ -56,12 +56,9 @@ Chrome 或 Edge 120 及以上版本。
 `new: true` 会跳过复用并创建新标签页。Extension 最多等待 30 秒，让 content script
 响应 `ping`；超时返回 `PAGE_NOT_READY`。
 
-持久 Session 记录只保存 Provider、Session/tab ID、当前 URL、时间戳、sequence、active
-标志和恢复策略。Chat 或历史读取成功后会回写当前标签页 URL，因此从首页导航到
-`/c/...` 后仍可在以后恢复。
-
-设置 `reopen_on_closed: true` 后，读取可以重开已记录 URL 并重试一次。Chat 绝不会
-重放。如果在分派前已确定标签页关闭，`TAB_CLOSED` 可以安全重试；如果开始分派后消息
+持久 Session 记录只保存 Provider、Session/tab ID、当前 URL、时间戳、sequence 和 active
+标志。Chat 或历史读取成功后会回写当前标签页 URL，因此从首页导航到 `/c/...` 后仍可在
+以后恢复。下一次操作前会统一重新绑定失效标签页。Chat 绝不会重放；如果开始分派后消息
 通信失败，Provider 返回 `CHAT_STATE_UNKNOWN`，此时重试不安全。
 
 ## DOM Profile
@@ -125,15 +122,15 @@ Completion-marker 变化会重置候选确认，但 marker 不要求必须存在
 证明完成。如果连续 5 分钟没有有效页面活动，Runtime 返回 `RESPONSE_TIMEOUT`，绝不会
 把半截文本作为成功结果。
 
-## Artifact 与调试
+## Artifact 与落盘
 
 图片只从 Assistant turn 提取。头像、favicon、图标、工具图标、装饰元素、loading
 placeholder 和用户上传图片会被过滤。source 按原图/下载资源、原图链接、最大 `srcset`、
 `currentSrc`、`src`、`data:`、`blob:` 的顺序选择；无法确认质量时使用 `unknown`。
 
-`debug-snapshot` 返回脱敏页面快照，`debug-trace` 返回单次 Chat 的内存事件轨迹，均不
-返回完整 DOM、Prompt、Cookie、Token、signed URL 或图片内容。图片生成后先用
-`wait-artifact` 等待 ready，再用 `get-artifact` 按 Artifact ID 落盘；不能直接下载任意 URL。
+Adapter 只返回最小 descriptor 和供 Broker 本地保存的私有 source。Broker 根据
+`(provider, turn_id, index)` 生成稳定 Artifact ID。`get-artifact` 内部重新解析 turn/index、
+等待 ready、刷新失效 source，再通过 data/blob/HTTPS 路径校验并落盘；不能直接下载任意 URL。
 
 ## 历史行为
 

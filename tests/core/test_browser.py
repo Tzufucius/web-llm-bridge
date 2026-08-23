@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from web_llm_bridge.browser import BrowserBootstrap, BrowserLauncher
 from web_llm_bridge.errors import BrowserLaunchError, RPCError
-from web_llm_bridge.protocol import BROWSER_HANDSHAKE_TIMEOUT_SECONDS, BROWSER_START_GRACE_SECONDS
+from web_llm_bridge.protocol import EXTENSION_GRACE_SECONDS, EXTENSION_HANDSHAKE_TIMEOUT_SECONDS
 from web_llm_bridge.transport.extension import ExtensionTransport
 
 
@@ -28,7 +28,7 @@ class BrowserBootstrapTests(unittest.IsolatedAsyncioTestCase):
         transport.connected = False
         launcher = MagicMock()
         bootstrap = BrowserBootstrap(transport, launcher)
-        with patch("web_llm_bridge.browser.launcher.BROWSER_GRACE_SECONDS", 0):
+        with patch("web_llm_bridge.browser.launcher.EXTENSION_GRACE_SECONDS", 0):
             await bootstrap.start("https://example.test", handshake_timeout=1)
         transport.start.assert_awaited_once()
         launcher.launch.assert_called_once_with("https://example.test")
@@ -53,7 +53,7 @@ class BrowserBootstrapTests(unittest.IsolatedAsyncioTestCase):
             transport.ready.set()
         launcher.launch.side_effect = launch
         bootstrap = BrowserBootstrap(transport, launcher)
-        with patch("web_llm_bridge.browser.launcher.BROWSER_GRACE_SECONDS", 0):
+        with patch("web_llm_bridge.browser.launcher.EXTENSION_GRACE_SECONDS", 0):
             await asyncio.gather(*(bootstrap.start("about:blank", handshake_timeout=1) for _ in range(5)))
         launcher.launch.assert_called_once_with("about:blank")
 
@@ -75,5 +75,5 @@ class ExtensionReadinessTests(unittest.IsolatedAsyncioTestCase):
 
 class BrowserProtocolConstantTests(unittest.TestCase):
     def test_startup_windows_are_public(self):
-        self.assertEqual(BROWSER_START_GRACE_SECONDS, 2.0)
-        self.assertEqual(BROWSER_HANDSHAKE_TIMEOUT_SECONDS, 60.0)
+        self.assertEqual(EXTENSION_GRACE_SECONDS, 2.0)
+        self.assertEqual(EXTENSION_HANDSHAKE_TIMEOUT_SECONDS, 60.0)

@@ -95,7 +95,7 @@ class SessionStore:
         updated_at = source.get("updated_at", now)
         if not isinstance(created_at, str) or not isinstance(updated_at, str):
             return None
-        return {"version": SCHEMA_VERSION, "provider": provider, "session_id": session_id, "tab_id": tab_id, "current_url": url, "created_at": created_at, "updated_at": updated_at, "sequence": sequence, "active": bool(source.get("active", False)), "reopen_on_closed": bool(source.get("reopen_on_closed", False))}
+        return {"version": SCHEMA_VERSION, "provider": provider, "session_id": session_id, "tab_id": tab_id, "current_url": url, "created_at": created_at, "updated_at": updated_at, "sequence": sequence, "active": bool(source.get("active", False))}
 
     def _records(self) -> dict[str, dict[str, Any]]:
         candidates: list[Any] = []
@@ -109,10 +109,15 @@ class SessionStore:
         except OSError:
             pass
         records: dict[str, dict[str, Any]] = {}
+        rewrite = False
         for candidate in candidates:
+            if isinstance(candidate, Mapping) and "reopen_on_closed" in candidate:
+                rewrite = True
             record = self._normalise(candidate) if isinstance(candidate, Mapping) else None
             if record:
                 records[record["session_id"]] = record
+        if rewrite and records:
+            self._persist(records)
         return records
 
     def _persist(self, records: Mapping[str, Mapping[str, Any]]) -> None:

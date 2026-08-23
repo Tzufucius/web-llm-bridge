@@ -34,27 +34,14 @@ class BrokerServer:
             if session_id is not None and not isinstance(session_id, str):
                 raise WebLLMBridgeError("session_id 参数必须是字符串", "INVALID_ARGUMENT")
             if method == "open":
-                result = await self.manager.open(provider=provider, new=params.get("new", False), url=params.get("url"), session_id=session_id, reopen_on_closed=params.get("reopen_on_closed"))
+                result = await self.manager.open(provider=provider, new=params.get("new", False), url=params.get("url"), session_id=session_id)
             elif method == "chat":
                 result = await self.manager.chat(params.get("text"), provider=provider, session_id=session_id, progress=progress_sink)
             elif method == "get_messages":
                 result = await self.manager.get_messages(provider=provider, session_id=session_id, limit=params.get("limit", DEFAULT_HISTORY_LIMIT), full=params.get("full", False))
-            elif method == "debug_snapshot":
-                result = await self.manager.debug_snapshot(provider=provider, session_id=session_id)
-            elif method == "debug_trace":
-                trace_request_id = params.get("request_id")
-                if not isinstance(trace_request_id, str) or not trace_request_id:
-                    raise WebLLMBridgeError("request_id 参数为必填字符串", "INVALID_ARGUMENT")
-                result = await self.manager.debug_trace(provider=provider, session_id=session_id, request_id=trace_request_id)
-            elif method == "wait_artifact":
-                artifact_id = params.get("artifact_id")
-                if not isinstance(artifact_id, str) or not artifact_id:
-                    raise WebLLMBridgeError("artifact_id 参数为必填字符串", "INVALID_ARGUMENT")
-                timeout_ms = params.get("timeout_ms", 60_000)
-                if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1_000 <= timeout_ms <= 300_000:
-                    raise WebLLMBridgeError("timeout_ms 必须是 1000 到 300000 的整数", "INVALID_ARGUMENT")
-                result = await self.manager.wait_artifact(artifact_id, timeout_ms=timeout_ms)
             elif method == "close_session":
+                if not isinstance(session_id, str) or not session_id:
+                    raise WebLLMBridgeError("session_id 参数为必填字符串", "INVALID_ARGUMENT")
                 result = await self.manager.close_session(provider=provider, session_id=session_id)
             elif method == "forget_session":
                 if not isinstance(session_id, str) or not session_id:

@@ -2,6 +2,7 @@ import tempfile
 import unittest
 
 from web_llm_bridge.providers.base import ProviderDefinition
+from web_llm_bridge.artifacts.model import make_artifact_id
 from web_llm_bridge.artifacts.store import ArtifactStore
 from web_llm_bridge.session.manager import SessionManager
 from web_llm_bridge.session.store import SessionStore
@@ -16,9 +17,10 @@ class FakeTransport:
     def __init__(self):
         self.calls = []
         self.next_tab = 10
+        self.started = False
 
     async def start(self):
-        return None
+        self.started = True
 
     async def close(self):
         return None
@@ -29,15 +31,26 @@ class FakeTransport:
             self.next_tab += 1
             return {"tab_id": self.next_tab, "url": params["url"]}
         if method == "chat":
-            return {"text": "", "request_id": "transport-request", "artifacts": [{"id": "img_test", "kind": "image", "provider": params["provider"], "turn_id": "turn", "index": 0, "mime_type": "image/png", "quality": "display", "_source": "data:image/png;base64,", "_source_kind": "data"}]}
+            return {"text": "", "artifacts": [{"kind": "image", "turn_id": "turn", "index": 0, "mime_type": "image/png", "quality": "display", "_source": "data:image/png;base64,", "_source_kind": "data"}]}
         if method == "close_tab":
             return {"tab_id": params["tab_id"], "closed": True}
         if method == "get_messages":
-            return {"messages": [], "truncated": False, "url": "https://first.example/"}
+            return {"messages": [{"role": "assistant", "content": "answer", "request_id": "hidden", "artifacts": [{"kind": "image", "turn_id": "turn", "index": 0, "mime_type": "image/png", "_source": "data:image/png;base64,AA==", "_source_kind": "data"}]}], "truncated": False, "url": "https://first.example/"}
         raise AssertionError(method)
 
 
 class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broker_restart_does_not_restore_active_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SessionStore(directory)
+            first = SessionManager(store, FakeRegistry(), FakeTransport(), ArtifactStore(directory + "/artifacts"))
+            opened = await first.open(provider="first")
+            await first.close()
+            restarted = SessionManager(store, FakeRegistry(), FakeTransport(), ArtifactStore(directory + "/artifacts"))
+            self.assertFalse(restarted.store.get(opened["session_id"], "first")["active"])
+            restored = await restarted.open(provider="first", session_id=opened["session_id"])
+            self.assertEqual(restored["session_id"], opened["session_id"])
+
     async def test_close_reopen_forget_and_image_only_chat(self):
         with tempfile.TemporaryDirectory() as directory:
             transport = FakeTransport()
@@ -45,12 +58,16 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             opened = await manager.open(provider="first", new=True)
             response = await manager.chat("prompt", provider="first", session_id=opened["session_id"])
             self.assertEqual(response["text"], "")
-            self.assertEqual(response["request_id"], "transport-request")
             self.assertEqual(len(response["artifacts"]), 1)
+            self.assertEqual(response["artifacts"][0]["id"], make_artifact_id("first", "turn", 0))
+            self.assertNotIn("request_id", response)
             closed = await manager.close_session(provider="first", session_id=opened["session_id"])
-            self.assertFalse(closed["active"])
+            self.assertNotIn("active", closed)
             reopened = await manager.open(provider="first", session_id=opened["session_id"])
             self.assertEqual(reopened["session_id"], opened["session_id"])
+            history = await manager.get_messages(provider="first", session_id=opened["session_id"])
+            self.assertNotIn("request_id", history["messages"][0])
+            self.assertNotIn("_source", history["messages"][0]["artifacts"][0])
             forgotten = await manager.forget_session(provider="first", session_id=opened["session_id"])
             self.assertTrue(forgotten["forgotten"])
             self.assertIsNone(manager.store.get(opened["session_id"]))

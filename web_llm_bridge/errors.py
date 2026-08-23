@@ -16,7 +16,3 @@ class RPCError(WebLLMBridgeError):
 
 class BrowserLaunchError(WebLLMBridgeError):
     """浏览器启动或扩展握手失败。"""
-
-
-# 迁移期兼容别名；新代码应使用 WebLLMBridgeError。
-ChatGPTBridgeError = WebLLMBridgeError

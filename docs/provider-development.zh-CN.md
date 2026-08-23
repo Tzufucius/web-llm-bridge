@@ -24,14 +24,13 @@ Python Provider **不**实现 `open`、`chat`、`get_messages` 或 `close`。其
 selector、DOM 解析、CLI 格式化、凭据或运行时连接状态。`SessionManager` 持有这些操作，
 并用 Provider ID 调用唯一共享 `ExtensionTransport`。
 
-### Session：持久绑定与策略
+### Session：持久绑定与恢复
 
-Session 代码持有记录选择、全局操作锁、元数据持久化、sequence 递增和显式
-`reopen_on_closed` 策略。它不知道 Prompt selector，也不知道站点如何表示消息。
+Session 代码持有记录选择、全局操作锁、元数据持久化和 sequence 递增，并隐藏标签页
+绑定细节。它不知道 Prompt selector，也不知道站点如何表示消息。
 
-恢复必须遵守副作用边界。启用策略后，`get_messages` 可以在分派前
-`TAB_CLOSED` 后重新绑定并重试一次。`chat` 可以为后续调用准备新绑定，但遇到错误后
-绝不能重放原 Prompt。
+恢复必须遵守副作用边界。下一次分派前会统一重新绑定失效标签页。`chat` 可以为后续
+调用准备新绑定，但遇到错误后绝不能重放原 Prompt。
 
 ### Transport：唯一连接所有者
 
@@ -210,7 +209,7 @@ adapter 不能自行重开或重试标签页。
 ### Artifact 契约
 
 需要暴露媒体的 Provider 可以实现 `adapter.getArtifacts(messageNode)` 和
-`adapter.resolveArtifact(ref)`。前者返回有界的 Provider-neutral descriptor，并可
-附带供 Broker 本地保存的私有 source 字段；后者在 signed source 过期时按
-`(turn_id, index)` 重新解析。公共结果不能包含 CSS selector、`outerHTML`、React
-内部信息、凭据或完整 data URI。
+`adapter.resolveArtifact({turn_id, index})`。前者只返回最小 descriptor（kind、turn/index、
+MIME、尺寸、alt、quality、ready），并附带供 Broker 本地保存的私有 source 字段；后者在
+signed source 过期时按 turn/index 重新解析，由 `get-artifact` 内部调用而不是 RPC。公共
+结果不能包含 CSS selector、`outerHTML`、React 内部信息、凭据或完整 data URI。

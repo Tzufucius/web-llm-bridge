@@ -14,16 +14,12 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Sequence
 
-from ..errors import BrowserLaunchError
+from ..errors import BrowserLaunchError, RPCError
 from ..protocol import (
     EXTENSION_GRACE_SECONDS,
     EXTENSION_HANDSHAKE_TIMEOUT_SECONDS,
 )
 from ..transport.extension import ExtensionTransport
-
-BROWSER_GRACE_SECONDS = EXTENSION_GRACE_SECONDS
-HANDSHAKE_TIMEOUT_SECONDS = EXTENSION_HANDSHAKE_TIMEOUT_SECONDS
-
 
 def _find_executable(browser: str) -> str | None:
     """Resolve only known browser names; never scan the whole disk."""
@@ -42,11 +38,6 @@ def _find_executable(browser: str) -> str | None:
             if candidate.is_file():
                 return str(candidate)
     return None
-
-
-def _default_executable() -> str | None:
-    """Compatibility helper for callers that explicitly need a Chromium path."""
-    return _find_executable("chrome") or _find_executable("edge")
 
 
 class BrowserLauncher:
@@ -77,13 +68,6 @@ class BrowserLauncher:
             return subprocess.Popen(command, close_fds=True)
         except (FileNotFoundError, OSError) as exc:
             raise BrowserLaunchError(f"无法启动浏览器：{executable}", "BROWSER_LAUNCH_FAILED") from exc
-
-
-def launch_browser(url: str | None = None, *, executable: str | os.PathLike[str] | None = None, extra_args: Sequence[str] = ()) -> Any:
-    """使用一次性 Launcher 打开 URL。"""
-    return BrowserLauncher(executable).launch(url, extra_args=extra_args)
-
-
 class BrowserBootstrap:
     """协调 Extension transport、浏览器启动和握手等待。"""
 
@@ -92,16 +76,16 @@ class BrowserBootstrap:
         self.launcher = launcher or BrowserLauncher()
         self._launch_lock = asyncio.Lock()
 
-    async def start(self, url: str | None = None, *, handshake_timeout: float = HANDSHAKE_TIMEOUT_SECONDS) -> None:
+    async def start(self, url: str | None = None, *, handshake_timeout: float = EXTENSION_HANDSHAKE_TIMEOUT_SECONDS) -> None:
         await self.transport.start()
         if self.transport.connected:
             return
-        if BROWSER_GRACE_SECONDS > 0:
+        if EXTENSION_GRACE_SECONDS > 0:
             try:
-                await self.transport.wait_until_ready(BROWSER_GRACE_SECONDS)
+                await self.transport.wait_until_ready(EXTENSION_GRACE_SECONDS)
                 if self.transport.connected:
                     return
-            except Exception:
+            except RPCError:
                 pass
         async with self._launch_lock:
             if self.transport.connected:
@@ -112,7 +96,7 @@ class BrowserBootstrap:
                 raise
             try:
                 await self.transport.wait_until_ready(handshake_timeout)
-            except Exception as exc:
+            except RPCError as exc:
                 raise BrowserLaunchError("浏览器已启动但扩展未连接到 Bridge", "BROWSER_EXTENSION_NOT_CONNECTED") from exc
 
     async def close(self) -> None:

@@ -63,24 +63,19 @@ class AgentCliTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "")
         self.assertEqual(error.getvalue(), "Error: 坏请求\n")
 
-    def test_debug_snapshot_calls_sanitized_rpc(self) -> None:
+    def test_help_lists_only_public_commands(self) -> None:
         output = io.StringIO()
-        with patch("web_llm_bridge.cli.agent.rpc_call", AsyncMock(return_value={"snapshot": {"generating": False}})), redirect_stdout(output):
-            self.assertEqual(main(["debug-snapshot", "--session-id", "session", "--json"]), 0)
-        self.assertEqual(json.loads(output.getvalue())["result"]["snapshot"]["generating"], False)
+        with self.assertRaises(SystemExit) as caught, redirect_stdout(output):
+            main(["--help"])
+        self.assertEqual(caught.exception.code, 0)
+        for command in ("open", "chat", "get-messages", "list-sessions", "close-session", "forget-session", "get-artifact"):
+            self.assertIn(command, output.getvalue())
+        for command in ("debug-snapshot", "debug-trace", "wait-artifact"):
+            self.assertNotIn(command, output.getvalue())
 
-    def test_debug_trace_requires_and_forwards_request_id(self) -> None:
-        output = io.StringIO()
-        fake = AsyncMock(return_value={"trace": {"request_id": "request"}})
-        with patch("web_llm_bridge.cli.agent.rpc_call", fake), redirect_stdout(output):
-            self.assertEqual(main(["debug-trace", "--request-id", "request", "--session-id", "session", "--json"]), 0)
-        self.assertEqual(fake.await_args.args[0], "debug_trace")
-        self.assertEqual(fake.await_args.args[1]["request_id"], "request")
-
-    def test_wait_artifact_forwards_timeout(self) -> None:
-        output = io.StringIO()
-        fake = AsyncMock(return_value={"id": "img_test", "ready": True})
-        with patch("web_llm_bridge.cli.agent.rpc_call", fake), redirect_stdout(output):
-            self.assertEqual(main(["wait-artifact", "--id", "img_test", "--timeout-ms", "1200", "--json"]), 0)
-        self.assertEqual(fake.await_args.args[0], "wait_artifact")
-        self.assertEqual(fake.await_args.args[1]["timeout_ms"], 1200)
+    def test_removed_commands_are_argparse_errors(self) -> None:
+        diagnostics = io.StringIO()
+        with self.assertRaises(SystemExit) as caught, redirect_stderr(diagnostics):
+            main(["debug-snapshot"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("invalid choice", diagnostics.getvalue())

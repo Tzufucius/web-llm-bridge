@@ -48,8 +48,18 @@ class ArtifactStore:
         artifact_id = descriptor.get("id")
         if not isinstance(artifact_id, str):
             raise ValueError("Artifact descriptor 缺少 id")
+        existing = self.get(artifact_id)
         value = dict(descriptor)
-        value.update({"session_id": session_id, "provider": provider, "conversation_url": conversation_url, "source_kind": source_kind, "source": source, "created_at": _now()})
+        value.update(
+            {
+                "session_id": session_id,
+                "provider": provider,
+                "conversation_url": conversation_url,
+                "source_kind": source_kind,
+                "source": source,
+                "created_at": existing.created_at if existing and existing.created_at else _now(),
+            }
+        )
         self._write(self._path(artifact_id), value)
         record = ArtifactRecord.from_json(value)
         if record is None:
