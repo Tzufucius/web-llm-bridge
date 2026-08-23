@@ -163,7 +163,7 @@ class SessionManager:
                     raise WebLLMBridgeError("Artifact 尚未就绪", "ARTIFACT_NOT_READY")
                 source = result.get("_source") if isinstance(result.get("_source"), str) else record.source
                 source_kind = result.get("_source_kind") if isinstance(result.get("_source_kind"), str) else record.source_kind
-                descriptor = {key: value for key, value in result.items() if not key.startswith("_") and key not in {"ready", "complete", "naturalWidth", "naturalHeight", "source_identity", "url", "provider"}}
+                descriptor = {key: value for key, value in result.items() if not key.startswith("_") and key not in {"ready", "complete", "naturalWidth", "naturalHeight", "source_identity", "url", "provider", "tab_id"}}
                 descriptor.setdefault("id", record.id)
                 descriptor.setdefault("kind", record.kind)
                 descriptor.setdefault("turn_id", record.turn_id)
