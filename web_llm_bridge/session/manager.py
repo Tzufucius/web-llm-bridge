@@ -11,7 +11,7 @@ from ..errors import RPCError, WebLLMBridgeError
 from ..artifacts.downloader import ArtifactMaterializer
 from ..artifacts.model import ArtifactRecord
 from ..browser.launcher import BrowserBootstrap
-from ..protocol import DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT
+from ..protocol import DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT, error_message
 from ..providers.registry import ProviderRegistry
 from ..transport import ExtensionTransport
 from .store import SessionStore
@@ -246,6 +246,8 @@ class SessionManager:
         try:
             return await self.transport.request(method, params, timeout_ms=timeout_ms, progress_callback=progress, reset_timeout_on_progress=reset_on_progress)
         except RPCError as exc:
+            if method == "chat" and exc.code in {"EXTENSION_NOT_CONNECTED", "CONTENT_SCRIPT_UNAVAILABLE", "TAB_CLOSED"}:
+                raise WebLLMBridgeError(error_message("CHAT_STATE_UNKNOWN"), "CHAT_STATE_UNKNOWN") from exc
             if method == "chat" and exc.code == "RPC_TIMEOUT":
                 raise WebLLMBridgeError("等待页面回复超时", "RESPONSE_TIMEOUT") from exc
             raise

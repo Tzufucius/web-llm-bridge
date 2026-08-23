@@ -2,6 +2,7 @@ import tempfile
 import unittest
 
 from web_llm_bridge.providers.base import ProviderDefinition
+from web_llm_bridge.errors import RPCError, WebLLMBridgeError
 from web_llm_bridge.session.manager import SessionManager
 from web_llm_bridge.session.store import SessionStore
 
@@ -42,3 +43,14 @@ class ManagerTransportTests(unittest.IsolatedAsyncioTestCase):
             await manager.open(provider="second")
         self.assertEqual(transport.starts, 1)
         self.assertEqual([params["provider"] for _, params in transport.calls], ["first", "second"])
+
+    async def test_chat_transport_loss_is_not_replayable(self):
+        class LosingTransport(FakeTransport):
+            async def request(self, method, params, **kwargs):
+                raise RPCError("断连", "EXTENSION_NOT_CONNECTED")
+
+        with tempfile.TemporaryDirectory() as directory:
+            manager = SessionManager(SessionStore(sessions_dir=directory), FakeRegistry(), LosingTransport())
+            with self.assertRaises(WebLLMBridgeError) as caught:
+                await manager._request_browser("chat", {"provider": "first", "tab_id": 1, "text": "hello"}, timeout_ms=1000)
+        self.assertEqual(caught.exception.code, "CHAT_STATE_UNKNOWN")
