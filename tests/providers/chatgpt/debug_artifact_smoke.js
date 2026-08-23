@@ -59,6 +59,10 @@ async function run() {
   assert.equal(trace.ok, true);
   const phases = trace.result.trace.events.map((event) => event.phase);
   for (const phase of ["before_send", "submitted", "assistant_node_seen", "artifact_seen", "artifact_ready", "completion_candidate", "completed"]) assert.ok(phases.includes(phase), phase);
+  const marked = await new Promise((resolve) => listeners[0]({ method: "trace_event", request_id: "debug-request", phase: "chat_state_unknown" }, {}, resolve));
+  assert.equal(marked.ok, true);
+  const markedTrace = await new Promise((resolve) => listeners[0]({ method: "debug_trace", request_id: "debug-request" }, {}, resolve));
+  assert.ok(markedTrace.result.trace.events.some((event) => event.phase === "chat_state_unknown"));
 
   const wait = await new Promise((resolve) => listeners[0]({ method: "wait_artifact", artifact_id: artifact.id, turn_id: artifact.turn_id, index: artifact.index, timeout_ms: 1_000 }, {}, resolve));
   assert.equal(wait.ok, true);
