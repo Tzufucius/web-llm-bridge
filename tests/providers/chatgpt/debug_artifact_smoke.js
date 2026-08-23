@@ -45,7 +45,8 @@ async function run() {
     },
     execCommand: () => false,
   };
-  const { context, listeners } = loadContentRuntime({ document, timingOverrides: { stableTimeMs: 20, completionConfirmationMs: 40, responseIdleTimeoutMs: 400 } });
+  const transferEvents = [];
+  const { context, listeners } = loadContentRuntime({ document, progress: transferEvents, timingOverrides: { stableTimeMs: 20, completionConfirmationMs: 40, responseIdleTimeoutMs: 400 } });
 
   const snapshot = await new Promise((resolve) => listeners[0]({ method: "debug_snapshot" }, {}, resolve));
   assert.equal(snapshot.ok, true);
@@ -71,6 +72,13 @@ async function run() {
   const wait = await new Promise((resolve) => listeners[0]({ method: "wait_artifact", artifact_id: artifact.id, turn_id: artifact.turn_id, index: artifact.index, timeout_ms: 1_000 }, {}, resolve));
   assert.equal(wait.ok, true);
   assert.equal(wait.result.ready, true);
+  const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  context.btoa = (binary) => Buffer.from(binary, "binary").toString("base64");
+  context.fetch = async () => ({ ok: true, headers: { get: () => "image/png" }, arrayBuffer: async () => bytes.buffer });
+  const transfer = await new Promise((resolve) => listeners[0]({ method: "get_artifact", request_id: "transfer", artifact: { id: "transfer-image", _source: "https://chatgpt.com/backend-api/estuary/content?id=test", mime_type: "image/png" } }, {}, resolve));
+  assert.equal(transfer.ok, true);
+  assert.equal(transfer.result.transferred, true);
+  assert.ok(transferEvents.some((event) => event.type === "artifact_start"));
   assert.equal(context.WebLLMBridge.ChatGPTAdapter.getArtifacts(assistants[1])[0].ready, true);
 }
 
