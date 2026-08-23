@@ -24,7 +24,11 @@ async function run() {
     generating = true;
     const assistant = new FakeNode("assistant", { "data-message-author-role": "assistant", "data-turn-id": "new" }, "");
     answerImage = image({ alt: "generated", src: "data:image/png;base64,ZmFrZQ==" }, false);
-    assistant.querySelectorAll = (selector) => selector === "img" ? [answerImage] : [];
+    const turn = new FakeNode("turn", { "data-turn-id": "new" });
+    turn.matches = (selector) => selector === "[data-turn-id]" || FakeNode.prototype.matches.call(turn, selector);
+    turn.querySelectorAll = (selector) => selector === "img" ? [answerImage] : [];
+    assistant.parentElement = turn;
+    assistant.querySelectorAll = () => [];
     assistants.push(assistant);
     setTimeout(() => { generating = false; }, 20);
     setTimeout(() => { answerImage.complete = true; answerImage.naturalWidth = 320; answerImage.naturalHeight = 200; }, 70);

@@ -57,6 +57,15 @@
     const naturalHeight = Number(image.naturalHeight || image.height || 0);
     return { source, complete, ready: complete && naturalWidth > 0 && naturalHeight > 0, naturalWidth, naturalHeight };
   }
+  function imageNodesFor(messageNode) {
+    if (!messageNode?.querySelectorAll) return [];
+    const roots = [messageNode];
+    const container = bridge.ChatGPTAdapter?.findTurnContainer?.(messageNode);
+    if (container && container !== messageNode) roots.push(container);
+    const nodes = []; const seen = new Set();
+    for (const rootNode of roots) for (const image of rootNode.querySelectorAll("img")) if (!seen.has(image)) { seen.add(image); nodes.push(image); }
+    return nodes;
+  }
   function debugImageCandidate(image, index) {
     const source = imageSource(image);
     const values = [image.getAttribute?.("alt"), image.getAttribute?.("aria-label"), image.getAttribute?.("class"), image.getAttribute?.("data-testid")].filter(Boolean).join(" ").toLowerCase();
@@ -80,7 +89,7 @@
     const role = messageNode.getAttribute?.("data-message-author-role");
     if (role && role !== "assistant") return [];
     const result = []; let index = 0;
-    for (const image of messageNode.querySelectorAll("img")) {
+    for (const image of imageNodesFor(messageNode)) {
       const state = isArtifactImage(image); if (!state) continue;
       const source = imageSource(image);
       const id = `img_${stableHash(`${profile.id}:${root.location?.pathname || ""}:${turnId(messageNode)}:${index}`)}_${index}`;
@@ -121,7 +130,7 @@
     const assistant = bridge.ChatGPTAdapter.getLastAssistant();
     const text = bridge.normalizeText(assistant?.innerText || assistant?.textContent || "");
     const artifacts = assistant ? getArtifacts(assistant) : [];
-    const imageNodes = assistant?.querySelectorAll?.("img") ? [...assistant.querySelectorAll("img")] : [];
+    const imageNodes = assistant ? imageNodesFor(assistant) : [];
     const origin = root.location?.origin || "";
     const pathname = root.location?.pathname || "/";
     return {
