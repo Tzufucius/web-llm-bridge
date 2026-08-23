@@ -71,10 +71,10 @@
     return result;
   }
   function resolveArtifact(ref) {
-    const turn = String(ref?.turn_id || ""); const index = Number(ref?.index);
+    const artifactId = String(ref?.artifact_id || ""); const turn = String(ref?.turn_id || ""); const index = Number(ref?.index);
     for (const node of document.querySelectorAll(selectors.assistant)) {
       if (turnId(node) !== turn) continue;
-      const artifacts = getArtifacts(node); if (artifacts[index]) return artifacts[index];
+      const artifacts = getArtifacts(node); if (artifacts[index] && (!artifactId || artifacts[index].id === artifactId)) return artifacts[index];
     }
     throw bridge.error("ARTIFACT_NOT_FOUND", "页面中未找到指定 Artifact", true);
   }
