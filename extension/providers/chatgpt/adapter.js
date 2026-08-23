@@ -66,6 +66,37 @@
     for (const rootNode of roots) for (const image of rootNode.querySelectorAll("img")) if (!seen.has(image)) { seen.add(image); nodes.push(image); }
     return nodes;
   }
+  function isGeneratedImage(image) {
+    const state = isArtifactImage(image);
+    if (!state) return false;
+    const alt = String(image.getAttribute?.("alt") || "");
+    return /已生成图片|generated\s+(?:image|picture)/i.test(alt) || /\/backend-api\/estuary\/content(?:[/?]|$)/i.test(state.source);
+  }
+  function visualTurnNodes() {
+    if (!document.querySelectorAll) return [];
+    const roots = document.querySelectorAll('[data-turn-id], [data-testid^="conversation-turn-"], [data-turn]');
+    return [...roots].filter((node) => node.getAttribute?.("data-message-author-role") !== "user" && imageNodesFor(node).some(isGeneratedImage));
+  }
+  function documentOrder(nodes) {
+    return [...nodes].sort((left, right) => {
+      if (left === right || !left?.compareDocumentPosition) return 0;
+      const relation = left.compareDocumentPosition(right);
+      if (relation & (root.Node?.DOCUMENT_POSITION_FOLLOWING || 4)) return -1;
+      if (relation & (root.Node?.DOCUMENT_POSITION_PRECEDING || 2)) return 1;
+      return 0;
+    });
+  }
+  function assistantNodes() {
+    const roleNodes = document.querySelectorAll(selectors.assistant) ? [...document.querySelectorAll(selectors.assistant)] : [];
+    const candidates = documentOrder([...roleNodes, ...visualTurnNodes()]);
+    const result = []; const seen = new Set();
+    for (const node of candidates) {
+      const container = bridge.ChatGPTAdapter.findTurnContainer(node);
+      if (seen.has(container)) continue;
+      seen.add(container); result.push(node);
+    }
+    return result;
+  }
   function debugImageCandidate(image, index) {
     const source = imageSource(image);
     const values = [image.getAttribute?.("alt"), image.getAttribute?.("aria-label"), image.getAttribute?.("class"), image.getAttribute?.("data-testid")].filter(Boolean).join(" ").toLowerCase();
@@ -100,7 +131,7 @@
   }
   function resolveArtifact(ref) {
     const artifactId = String(ref?.artifact_id || ""); const turn = String(ref?.turn_id || ""); const index = Number(ref?.index);
-    for (const node of document.querySelectorAll(selectors.assistant)) {
+    for (const node of assistantNodes()) {
       if (turnId(node) !== turn) continue;
       const artifacts = getArtifacts(node); if (artifacts[index] && (!artifactId || artifacts[index].id === artifactId)) return artifacts[index];
     }
@@ -142,7 +173,7 @@
       },
       counts: {
         users: bridge.ChatGPTAdapter.getUsers().length,
-        assistants: document.querySelectorAll(selectors.assistant).length,
+        assistants: assistantNodes().length,
         messages: bridge.ChatGPTAdapter.getMessages().length,
       },
       assistant: assistant ? {
@@ -167,10 +198,13 @@
     findSendButton: () => findVisible(selectors.send),
     isGenerating: () => Boolean(findVisible(selectors.stop)),
     isEnabled: (button) => !button.disabled && button.getAttribute("aria-disabled") !== "true" && !button.hasAttribute("disabled"),
-    getMessages: () => document.querySelectorAll(selectors.message),
+    getMessages: () => {
+      const users = [...document.querySelectorAll(selectors.user)];
+      return documentOrder([...users, ...assistantNodes()]);
+    },
     getUsers: () => document.querySelectorAll(selectors.user),
-    getLastAssistant: () => { const nodes = document.querySelectorAll(selectors.assistant); return nodes.length ? nodes[nodes.length - 1] : null; },
-    getRole: (node) => node.getAttribute("data-message-author-role"),
+    getLastAssistant: () => { const nodes = assistantNodes(); return nodes.length ? nodes[nodes.length - 1] : null; },
+    getRole: (node) => { const role = node.getAttribute("data-message-author-role"); return role || (getArtifacts(node).length ? "assistant" : null); },
     findTurnContainer: (node) => node.closest("[data-turn-id]") || node.closest('[data-testid^="conversation-turn-"]') || node.closest("[data-turn]") || node,
     turnAttributes: ["data-turn-id", "data-testid", "data-turn"],
     getArtifacts,
