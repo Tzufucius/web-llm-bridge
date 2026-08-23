@@ -18,6 +18,7 @@
     return `node-${stableHash(container?.innerText || "")}`;
   }
   function sourceKind(source) { try { return new URL(source, root.location?.href || undefined).protocol.replace(":", ""); } catch (_error) { return ""; } }
+  function absoluteSource(source) { try { return new URL(source, root.location?.href || undefined).href; } catch (_error) { return source; } }
   function candidateFromSrcset(value) {
     if (typeof value !== "string") return null;
     const candidates = value.split(",").map((item) => {
@@ -32,16 +33,16 @@
   function attr(element, names) { for (const name of names) { const value = element?.getAttribute?.(name); if (value) return value; } return ""; }
   function imageSource(image) {
     const original = attr(image, ["data-original", "data-original-src", "data-full-size", "data-download-url"]);
-    if (original) return { source: original, quality: "original" };
+    if (original) return { source: absoluteSource(original), quality: "original" };
     const anchor = image.closest?.("a");
     const href = anchor?.getAttribute?.("href") || "";
-    if (href && /^(https?:|data:|blob:)/i.test(href)) return { source: href, quality: "original" };
+    if (href && /^(https?:|data:|blob:|\/)/i.test(href)) return { source: absoluteSource(href), quality: "original" };
     const srcset = candidateFromSrcset(image.getAttribute?.("srcset"));
-    if (srcset) return { source: srcset, quality: "display" };
+    if (srcset) return { source: absoluteSource(srcset), quality: "display" };
     const current = image.currentSrc || "";
-    if (current) return { source: current, quality: "unknown" };
+    if (current) return { source: absoluteSource(current), quality: "unknown" };
     const src = image.getAttribute?.("src") || "";
-    if (src) return { source: src, quality: "unknown" };
+    if (src) return { source: absoluteSource(src), quality: "unknown" };
     return { source: "", quality: "unknown" };
   }
   function isArtifactImage(image) {
