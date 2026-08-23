@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 from typing import Any, Mapping
@@ -22,7 +23,7 @@ class ArtifactStore:
         self.root_dir = Path(root_dir) if root_dir is not None else home / "artifacts"
 
     def _path(self, artifact_id: str) -> Path:
-        if not isinstance(artifact_id, str) or not artifact_id.startswith("img_") or "/" in artifact_id or "\\" in artifact_id:
+        if not isinstance(artifact_id, str) or re.fullmatch(r"img_[A-Za-z0-9_-]{1,128}", artifact_id) is None:
             raise ValueError("artifact_id 无效")
         return self.root_dir / f"{artifact_id}.json"
 

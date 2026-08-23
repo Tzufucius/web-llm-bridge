@@ -92,3 +92,8 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.get(value.id).source, value.source)
             self.assertEqual(store.delete_session(value.session_id), 1)
             self.assertIsNone(store.get(value.id))
+
+    def test_store_rejects_path_like_artifact_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ArtifactStore(directory)
+            self.assertIsNone(store.get("img_..\\escape"))
