@@ -236,3 +236,12 @@ security boundaries when adding a provider. If code lives in a private
 submodule, pin a reproducible commit and test submodule availability in CI.
 Credentials belong in Git configuration, never Python configuration or the
 browser extension.
+
+### Artifact contract
+
+Providers that expose media may implement `adapter.getArtifacts(messageNode)`
+and `adapter.resolveArtifact(ref)`. The first method returns bounded,
+provider-neutral descriptors plus private source fields for Broker persistence;
+the second re-resolves a `(turn_id, index)` reference when a signed source has
+expired. Public results must not contain CSS selectors, `outerHTML`, React
+internals, credentials, or complete data URIs.

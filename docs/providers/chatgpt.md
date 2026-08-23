@@ -226,3 +226,10 @@ date.
 Last synthetic verification: 2026-08-22, Chrome/Edge Manifest V3 DOM smoke
 fixtures. A real signed-in end-to-end pass is still required before claiming a
 specific current ChatGPT page release as verified.
+
+Assistant images are collected only from the Assistant turn. Avatars, icons,
+loading placeholders, and user-uploaded images are ignored. Source selection
+prefers an explicit original/download resource, then an original link, the
+largest `srcset` candidate, `currentSrc`, `src`, `data:`, and finally `blob:`.
+The adapter returns stable `(turn_id, index)` references and reports image
+readiness in its internal signature so image-only replies can complete safely.

@@ -197,3 +197,8 @@ annotation 的 MathJax 结构，以及当前 DOM 未暴露的内容。未知元�
 
 最近一次合成验证：2026-08-22，Chrome/Edge Manifest V3 DOM smoke fixture。在声称特定
 当前 ChatGPT 页面版本通过验证前，仍需执行真实登录态端到端测试。
+
+图片只从 Assistant turn 中提取。头像、图标、loading placeholder 和用户上传图片
+会被过滤。source 优先使用明确的原图/下载资源，其次是原图链接、最大 `srcset`、
+`currentSrc`、`src`、`data:`，最后是 `blob:`。Adapter 返回稳定的 `(turn_id, index)`
+引用，并在内部签名中记录图片 readiness，使纯图片回复可以安全完成。

@@ -206,3 +206,11 @@ adapter 不能自行重开或重试标签页。
 新增 Provider 时更新 capability 列表、协议文档、Provider 目录文档和安全边界。如果代码
 位于 private submodule，必须固定可复现 commit，并在 CI 检查 submodule 可用性。凭据
 属于 Git 配置，不能进入 Python 配置或浏览器扩展。
+
+### Artifact 契约
+
+需要暴露媒体的 Provider 可以实现 `adapter.getArtifacts(messageNode)` 和
+`adapter.resolveArtifact(ref)`。前者返回有界的 Provider-neutral descriptor，并可
+附带供 Broker 本地保存的私有 source 字段；后者在 signed source 过期时按
+`(turn_id, index)` 重新解析。公共结果不能包含 CSS selector、`outerHTML`、React
+内部信息、凭据或完整 data URI。

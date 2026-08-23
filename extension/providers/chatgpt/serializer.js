@@ -4,6 +4,7 @@
   bridge.ChatGPTSerializer = {
     serializeElement(element) {
       const tag = element.tagName.toLowerCase();
+      if (tag === "img" || (tag === "a" && element.querySelector?.("img"))) return "";
       if (tag === "math" || element.classList.contains("katex")) {
         const tex = (element.querySelector('annotation[encoding="application/x-tex"]')?.textContent || "").trim();
         if (!tex) return "";
