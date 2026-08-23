@@ -29,7 +29,7 @@ class FakeTransport:
             self.next_tab += 1
             return {"tab_id": self.next_tab, "url": params["url"]}
         if method == "chat":
-            return {"text": "", "artifacts": [{"id": "img_test", "kind": "image", "provider": params["provider"], "turn_id": "turn", "index": 0, "mime_type": "image/png", "quality": "display", "_source": "data:image/png;base64,", "_source_kind": "data"}]}
+            return {"text": "", "request_id": "transport-request", "artifacts": [{"id": "img_test", "kind": "image", "provider": params["provider"], "turn_id": "turn", "index": 0, "mime_type": "image/png", "quality": "display", "_source": "data:image/png;base64,", "_source_kind": "data"}]}
         if method == "close_tab":
             return {"tab_id": params["tab_id"], "closed": True}
         if method == "get_messages":
@@ -45,6 +45,7 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             opened = await manager.open(provider="first", new=True)
             response = await manager.chat("prompt", provider="first", session_id=opened["session_id"])
             self.assertEqual(response["text"], "")
+            self.assertEqual(response["request_id"], "transport-request")
             self.assertEqual(len(response["artifacts"]), 1)
             closed = await manager.close_session(provider="first", session_id=opened["session_id"])
             self.assertFalse(closed["active"])

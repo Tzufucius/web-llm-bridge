@@ -96,6 +96,10 @@ non-empty string `text` containing the final serialized assistant response.
 `sequence` is incremented before browser dispatch, even if the operation later
 fails. Callers must not use it as submission proof.
 
+A successful chat result also contains the Extension request ID (`request_id`).
+It is intended for a subsequent `debug_trace` call and is not proof that the
+Prompt was submitted.
+
 #### `get_messages`
 
 Parameters are `provider`, optional `session_id`, `full`, and `limit`:

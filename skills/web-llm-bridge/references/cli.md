@@ -50,6 +50,8 @@ Exactly one of `--text` and `--stdin` is required. `--stdin` reads until EOF
 and is preferred for code, Markdown, JSON, diffs, logs, and other multiline
 content. `--session-id` is optional and otherwise selects the active Session.
 `--provider` defaults to `chatgpt`.
+The JSON result includes `request_id`; pass it to `debug-trace` when diagnosing
+the completed request.
 
 ### `get-messages`
 

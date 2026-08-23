@@ -89,6 +89,9 @@ Session 时，Manager 会在 Provider 默认 URL 创建 Session。结果是上�
 浏览器分派前 `sequence` 就会递增，即使操作随后失败也不回退。调用方不能把它作为提交
 成功的证据。
 
+成功的 Chat 结果还会包含 Extension request ID（`request_id`）。该 ID 只用于随后调用
+`debug_trace`，不代表 Prompt 已成功提交。
+
 #### `get_messages`
 
 参数为 `provider`、可选 `session_id`、`full` 和 `limit`：

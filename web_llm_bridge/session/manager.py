@@ -75,6 +75,8 @@ class SessionManager:
                 raise
             saved = self.store.upsert(record, current_url=result.get("url", record["current_url"]), sequence=sequence, active=True)
             response: dict[str, Any] = {**self._result(saved), "text": result["text"], "artifacts": self._persist_artifacts(saved, result.get("artifacts"))}
+            if isinstance(result.get("request_id"), str) and result["request_id"]:
+                response["request_id"] = result["request_id"]
             return response
 
     async def get_messages(self, *, provider: str = "chatgpt", session_id: str | None = None, limit: int | None = DEFAULT_HISTORY_LIMIT, full: bool = False) -> dict[str, Any]:
