@@ -130,6 +130,21 @@ When a successful `chat` or `get-messages` result contains `artifacts`, use
 ChatGPT DOM, copy data URIs, fetch `blob:` URLs directly, or invoke arbitrary
 download URLs.
 
+For image-generation debugging, use the Bridge-owned diagnostics rather than
+browser automation:
+
+```bash
+web-llm-agent debug-snapshot --session-id SESSION_ID --json
+web-llm-agent debug-trace --session-id SESSION_ID --request-id REQUEST_ID --json
+web-llm-agent wait-artifact --id ARTIFACT_ID --timeout-ms 60000 --json
+```
+
+The snapshot and trace are sanitized and bounded. They do not expose full DOM,
+prompt contents, cookies, tokens, signed URLs, data URIs, or blob bytes. A
+`wait-artifact` call only waits for an existing descriptor and never resubmits
+the original Prompt. If `CHAT_STATE_UNKNOWN` is returned, inspect messages and
+the trace; do not call `chat` again automatically.
+
 To release a browser tab while keeping the Conversation recoverable, use
 `close-session`. Use `forget-session` only when the local Bridge should stop
 maintaining that Session. Never close all ChatGPT tabs or call `chrome.tabs`
