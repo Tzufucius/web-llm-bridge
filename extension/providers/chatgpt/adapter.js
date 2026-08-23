@@ -57,6 +57,24 @@
     const naturalHeight = Number(image.naturalHeight || image.height || 0);
     return { source, complete, ready: complete && naturalWidth > 0 && naturalHeight > 0, naturalWidth, naturalHeight };
   }
+  function debugImageCandidate(image, index) {
+    const source = imageSource(image);
+    const values = [image.getAttribute?.("alt"), image.getAttribute?.("aria-label"), image.getAttribute?.("class"), image.getAttribute?.("data-testid")].filter(Boolean).join(" ").toLowerCase();
+    const filteredByAttributes = /(avatar|favicon|icon|toolbar|logo|loading|placeholder|spinner|thumbnail|工具|头像|图标)/i.test(values) || Boolean(image.closest?.("[aria-hidden='true']"));
+    const sourceKindValue = sourceKind(source.source);
+    const sourceAllowed = /^(https?:|data:|blob:)$/i.test(sourceKindValue);
+    const complete = image.complete !== false;
+    const naturalWidth = Number(image.naturalWidth || image.width || 0);
+    const naturalHeight = Number(image.naturalHeight || image.height || 0);
+    const accepted = Boolean(isArtifactImage(image));
+    const reasons = [];
+    if (filteredByAttributes) reasons.push("filtered_attributes");
+    if (!source.source || !sourceAllowed) reasons.push("source_unavailable");
+    if (source.source && /(avatar|favicon|icon|loading|placeholder|spinner|thumbnail)/i.test(source.source)) reasons.push("filtered_source");
+    if (!complete || naturalWidth <= 0 || naturalHeight <= 0) reasons.push("not_ready");
+    if (!reasons.length && !accepted) reasons.push("provider_filter");
+    return { index, accepted, source_kind: sourceKindValue || null, source_available: Boolean(source.source), source_hash: source.source ? stableHash(source.source) : null, complete, natural_width: naturalWidth, natural_height: naturalHeight, alt_length: String(image.getAttribute?.("alt") || "").length, class_hash: stableHash(image.getAttribute?.("class") || ""), testid_hash: stableHash(image.getAttribute?.("data-testid") || ""), reasons };
+  }
   function getArtifacts(messageNode) {
     if (!messageNode?.querySelectorAll) return [];
     const role = messageNode.getAttribute?.("data-message-author-role");
@@ -103,6 +121,7 @@
     const assistant = bridge.ChatGPTAdapter.getLastAssistant();
     const text = bridge.normalizeText(assistant?.innerText || assistant?.textContent || "");
     const artifacts = assistant ? getArtifacts(assistant) : [];
+    const imageNodes = assistant?.querySelectorAll?.("img") ? [...assistant.querySelectorAll("img")] : [];
     const origin = root.location?.origin || "";
     const pathname = root.location?.pathname || "/";
     return {
@@ -127,6 +146,8 @@
       generating: bridge.ChatGPTAdapter.isGenerating(),
       revision: Number.isInteger(revision) ? revision : 0,
       artifacts: artifacts.map(debugArtifact),
+      visual_elements: { img: imageNodes.length, canvas: assistant?.querySelectorAll?.("canvas")?.length || 0, svg: assistant?.querySelectorAll?.("svg")?.length || 0, role_img: assistant?.querySelectorAll?.('[role="img"]')?.length || 0 },
+      image_candidates: imageNodes.slice(0, 16).map(debugImageCandidate),
       artifact_signature: JSON.stringify(artifacts.map((item) => [item.id, item.index, item.width, item.height, item.complete, item.naturalWidth, item.naturalHeight, item.ready, item._source_kind || sourceKind(item.source_identity || "")])),
     };
   }
