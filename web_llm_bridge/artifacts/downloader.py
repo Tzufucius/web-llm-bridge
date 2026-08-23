@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import tempfile
 from typing import Any, Awaitable, Callable
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 from urllib.request import Request, urlopen
 
 from ..errors import WebLLMBridgeError
@@ -57,7 +57,7 @@ def _data_uri(source: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> tuple[str,
     if "base64" in {item.lower() for item in metadata[1:]} and len(payload) > ((max_bytes + 2) // 3) * 4:
         raise WebLLMBridgeError("Artifact 超过大小限制", "ARTIFACT_TOO_LARGE")
     try:
-        data = base64.b64decode(payload, validate=True) if "base64" in {item.lower() for item in metadata[1:]} else unquote(payload).encode("utf-8")
+        data = base64.b64decode(payload, validate=True) if "base64" in {item.lower() for item in metadata[1:]} else unquote_to_bytes(payload)
     except (ValueError, binascii.Error) as exc:
         raise WebLLMBridgeError("Artifact data URL 编码无效", "ARTIFACT_TRANSFER_FAILED") from exc
     return mime_type or "", data
