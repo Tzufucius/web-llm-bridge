@@ -151,6 +151,7 @@ Chat 与历史响应可以增加 `artifacts` 数组。图片 descriptor 包含 `
 revision 以及 Artifact 的就绪状态、尺寸、source 类型和 hash。不会返回完整 HTML、Prompt
 内容、Cookie、Token、signed URL、data URI 或 blob 内容。该方法需要浏览器 Extension
 连接，并可能触发同一套 Browser Bootstrap 和 Session rebind。
+快照还会列出最近保留的 Trace ID，便于 Chat 客户端在最终响应丢失时继续定位同一次请求。
 
 #### `debug_trace`
 

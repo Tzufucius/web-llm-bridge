@@ -168,6 +168,8 @@ revision, and Artifact readiness, dimensions, source kind, and source hash. It
 never returns full HTML, prompt text, cookies, tokens, signed URLs, data URIs,
 or blob contents. It uses the same Browser Bootstrap and Session rebind path as
 other browser operations.
+The snapshot also lists recently retained Trace IDs so a client can locate the
+same request when its final chat response was lost.
 
 #### `debug_trace`
 
