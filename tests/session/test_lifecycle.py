@@ -53,4 +53,5 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             forgotten = await manager.forget_session(provider="first", session_id=opened["session_id"])
             self.assertTrue(forgotten["forgotten"])
             self.assertIsNone(manager.store.get(opened["session_id"]))
+            self.assertIsNone(SessionStore(directory).get(opened["session_id"]))
             self.assertIn("close_tab", [method for method, _ in transport.calls])
