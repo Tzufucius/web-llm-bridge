@@ -7,21 +7,14 @@ BRIDGE_HOST: Final = "127.0.0.1"
 EXTENSION_PORT: Final = 8765
 EXTENSION_GRACE_SECONDS: Final = 2.0
 EXTENSION_HANDSHAKE_TIMEOUT_SECONDS: Final = 60.0
-# 语义别名，供浏览器启动层和上层调用方使用。
-BROWSER_START_GRACE_SECONDS: Final = EXTENSION_GRACE_SECONDS
-BROWSER_HANDSHAKE_TIMEOUT_SECONDS: Final = EXTENSION_HANDSHAKE_TIMEOUT_SECONDS
 BROKER_PORT: Final = 8766
 MAX_MESSAGE_BYTES: Final = 8 * 1024 * 1024
 PROTOCOL_VERSION: Final = 2
 DEFAULT_HISTORY_LIMIT: Final = 5
 MAX_HISTORY_LIMIT: Final = 1_000
-MAX_DEBUG_TRACE_EVENTS: Final = 128
-MAX_DEBUG_TRACE_REQUESTS: Final = 16
 PROGRESS_PHASES: Final = {"submitted", "thinking", "working", "tool_call", "streaming"}
 ERROR_MESSAGES: Final = {
     "EXTENSION_NOT_CONNECTED": "尚未检测到浏览器扩展",
-    "BROWSER_START_FAILED": "浏览器启动失败",
-    "BROWSER_NOT_FOUND": "找不到可用的浏览器可执行文件",
     "EXTENSION_HANDSHAKE_TIMEOUT": "等待浏览器扩展握手超时",
     "BROWSER_EXTENSION_NOT_CONNECTED": "浏览器已启动但扩展未连接到 Bridge",
     "BROWSER_LAUNCH_FAILED": "浏览器启动失败",
@@ -40,10 +33,8 @@ ERROR_MESSAGES: Final = {
     "ARTIFACT_TOO_LARGE": "Artifact 超过大小限制",
     "ARTIFACT_TRANSFER_FAILED": "Artifact 传输失败",
     "ARTIFACT_INVALID_TYPE": "Artifact 类型无效",
-    "ARTIFACT_SOURCE_EXPIRED": "Artifact 来源已过期",
     "ARTIFACT_NOT_READY": "Artifact 尚未就绪",
     "ARTIFACT_WRITE_FAILED": "Artifact 文件写入失败",
-    "DEBUG_TRACE_NOT_FOUND": "找不到指定的调试 Trace",
     "INTERNAL_ERROR": "Web LLM Bridge 内部错误",
 }
 

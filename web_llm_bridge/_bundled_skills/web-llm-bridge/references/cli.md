@@ -33,7 +33,6 @@ Options:
 
 - `--new`, `--url URL`, and `--session-id SESSION_ID` are mutually exclusive;
 - `--provider PROVIDER` defaults to `chatgpt`;
-- `--reopen-on-closed` asks the runtime to reopen a closed tab when possible;
 - `--json` writes one machine-readable result to stdout.
 
 Without a target, `open` uses the provider's active Session when available.
@@ -50,8 +49,8 @@ Exactly one of `--text` and `--stdin` is required. `--stdin` reads until EOF
 and is preferred for code, Markdown, JSON, diffs, logs, and other multiline
 content. `--session-id` is optional and otherwise selects the active Session.
 `--provider` defaults to `chatgpt`.
-The JSON result includes `request_id`; pass it to `debug-trace` when diagnosing
-the completed request.
+The JSON result contains only business fields; internal transport request IDs
+are not exposed.
 
 ### `get-messages`
 
@@ -63,19 +62,6 @@ web-llm-agent get-messages --all --json
 
 `--limit` defaults to `5` and accepts `1` through `1000`. `--all` requests the
 complete collected history and takes precedence over `--limit`.
-
-### `debug-snapshot` and `debug-trace`
-
-```bash
-web-llm-agent debug-snapshot --session-id SESSION_ID --json
-web-llm-agent debug-trace --session-id SESSION_ID --request-id REQUEST_ID --json
-```
-
-`debug-snapshot` reports sanitized page, message, completion, and Artifact
-state. `debug-trace` reports the bounded in-memory events for one `chat`
-request. Neither command returns full DOM, prompt contents, cookies, tokens,
-signed URLs, data URIs, or blob bytes. Traces disappear when the Extension is
-reloaded.
 
 ### `list-sessions`
 
@@ -107,17 +93,6 @@ web-llm-agent get-artifact --id ARTIFACT_ID --output ./image.png --json
 
 Only an Artifact ID is accepted; arbitrary URLs are not. The result contains an
 absolute local path, MIME type, size, SHA-256, and quality.
-
-### `wait-artifact`
-
-```bash
-web-llm-agent wait-artifact --id ARTIFACT_ID --timeout-ms 60000 --json
-```
-
-This waits for an already discovered Artifact to become ready and never
-resubmits the Prompt. The timeout must be between 1000 and 300000 milliseconds.
-For an inactive Session the Bridge temporarily restores the bound conversation,
-waits, then closes the temporary tab again.
 
 ## JSON and exit codes
 

@@ -21,7 +21,6 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument("--url", help="Open or restore this conversation URL.")
     group.add_argument("--session-id", help="Restore a persisted session by ID.")
     opened.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
-    opened.add_argument("--reopen-on-closed", action="store_true", default=None, help="Reopen a closed browser tab when possible.")
     opened.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     chat = commands.add_parser("chat", help="Send one prompt and wait for the response.")
     text_source = chat.add_mutually_exclusive_group(required=True)
@@ -36,15 +35,6 @@ def _parser() -> argparse.ArgumentParser:
     history.add_argument("--session-id", help="Target session ID; defaults to the active session.")
     history.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
     history.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
-    snapshot = commands.add_parser("debug-snapshot", help="Read a sanitized DOM and Artifact snapshot from the bound tab.")
-    snapshot.add_argument("--session-id", help="Target session ID; defaults to the active session.")
-    snapshot.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
-    snapshot.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
-    trace = commands.add_parser("debug-trace", help="Read the in-memory trace for one chat request.")
-    trace.add_argument("--request-id", required=True, help="Chat request ID returned by the Broker trace.")
-    trace.add_argument("--session-id", help="Target session ID; defaults to the active session.")
-    trace.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
-    trace.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     listed = commands.add_parser("list-sessions", help="List persisted sessions.")
     listed.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
     listed.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
@@ -60,16 +50,12 @@ def _parser() -> argparse.ArgumentParser:
     artifact.add_argument("--id", required=True, dest="artifact_id", help="Artifact ID.")
     artifact.add_argument("--output", help="Optional output file; defaults to the Artifact store.")
     artifact.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
-    waited = commands.add_parser("wait-artifact", help="Wait for a discovered Artifact to become ready.")
-    waited.add_argument("--id", required=True, dest="artifact_id", help="Artifact ID.")
-    waited.add_argument("--timeout-ms", type=int, default=60_000, help="Maximum wait in milliseconds (default: 60000).")
-    waited.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     return parser
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "open":
-        return await rpc_call("open", {"provider": args.provider, "new": args.new, "url": args.url, "session_id": args.session_id, "reopen_on_closed": args.reopen_on_closed})
+        return await rpc_call("open", {"provider": args.provider, "new": args.new, "url": args.url, "session_id": args.session_id})
     if args.command == "chat":
         text = sys.stdin.read() if args.stdin else args.text
         def progress(event: dict[str, Any]) -> None:
@@ -77,18 +63,12 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         return await rpc_call("chat", {"provider": args.provider, "session_id": args.session_id, "text": text}, progress=progress)
     if args.command == "get-messages":
         return await rpc_call("get_messages", {"provider": args.provider, "session_id": args.session_id, "limit": args.limit, "full": args.full})
-    if args.command == "debug-snapshot":
-        return await rpc_call("debug_snapshot", {"provider": args.provider, "session_id": args.session_id})
-    if args.command == "debug-trace":
-        return await rpc_call("debug_trace", {"provider": args.provider, "session_id": args.session_id, "request_id": args.request_id})
     if args.command == "close-session":
         return await rpc_call("close_session", {"provider": args.provider, "session_id": args.session_id})
     if args.command == "forget-session":
         return await rpc_call("forget_session", {"provider": args.provider, "session_id": args.session_id})
     if args.command == "get-artifact":
         return await rpc_call("get_artifact", {"artifact_id": args.artifact_id, "output": args.output})
-    if args.command == "wait-artifact":
-        return await rpc_call("wait_artifact", {"artifact_id": args.artifact_id, "timeout_ms": args.timeout_ms})
     return await rpc_call("list_sessions", {"provider": args.provider})
 
 

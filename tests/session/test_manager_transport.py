@@ -24,9 +24,12 @@ class FakeTransport:
     def __init__(self):
         self.starts = 0
         self.calls = []
+        self.started = False
 
     async def start(self):
-        self.starts += 1
+        if not self.started:
+            self.starts += 1
+            self.started = True
 
     async def close(self):
         return None
@@ -57,8 +60,8 @@ class ManagerTransportTests(unittest.IsolatedAsyncioTestCase):
                 await manager._request_browser("chat", {"provider": "first", "tab_id": 1, "text": "hello"}, timeout_ms=1000)
         self.assertEqual(caught.exception.code, "CHAT_STATE_UNKNOWN")
 
-    async def test_debug_snapshot_trace_and_wait_artifact(self):
-        class DebugTransport(FakeTransport):
+    async def test_get_artifact_binds_closed_session_and_cleans_temporary_tab(self):
+        class ArtifactTransport(FakeTransport):
             def __init__(self):
                 super().__init__()
                 self.next_tab = 10
@@ -68,31 +71,26 @@ class ManagerTransportTests(unittest.IsolatedAsyncioTestCase):
                 if method == "open":
                     self.next_tab += 1
                     return {"tab_id": self.next_tab, "url": params["url"]}
-                if method == "debug_snapshot":
-                    return {"tab_id": params["tab_id"], "url": "https://first.example/c/one", "snapshot": {"generating": False, "artifacts": []}}
-                if method == "debug_trace":
-                    return {"tab_id": params["tab_id"], "url": "https://first.example/c/one", "trace": {"request_id": params["request_id"], "events": []}}
-                if method == "wait_artifact":
-                    return {"tab_id": params["tab_id"], "url": "https://first.example/c/one", "ready": True, "complete": True, "id": params["artifact_id"], "kind": "image", "provider": "first", "turn_id": "turn-1", "index": 0, "mime_type": "image/png", "width": 2, "height": 2, "_source": "data:image/png;base64,AA==", "_source_kind": "data"}
+                if method == "get_artifact":
+                    return {"tab_id": params["tab_id"], "url": "https://first.example/c/one", "_artifact_bytes": b"\x89PNG\r\n\x1a\nsynthetic", "_artifact_mime_type": "image/png", "_source": "blob:https://first.example/refreshed", "_source_kind": "blob"}
                 if method == "close_tab":
                     return {"tab_id": params["tab_id"], "closed": True}
                 raise AssertionError(method)
 
         with tempfile.TemporaryDirectory() as directory:
-            transport = DebugTransport()
+            transport = ArtifactTransport()
             artifacts = ArtifactStore(f"{directory}/artifacts")
             manager = SessionManager(SessionStore(sessions_dir=directory), FakeRegistry(), transport, artifacts)
             opened = await manager.open(provider="first", url="https://first.example/c/one")
-            snapshot = await manager.debug_snapshot(provider="first", session_id=opened["session_id"])
-            trace = await manager.debug_trace(provider="first", session_id=opened["session_id"], request_id="request-1")
             artifact_id = make_artifact_id("first", "turn-1", 0)
-            artifacts.upsert(session_id=opened["session_id"], provider="first", conversation_url=opened["conversation_url"], descriptor={"id": artifact_id, "kind": "image", "provider": "first", "turn_id": "turn-1", "index": 0, "mime_type": "image/png"}, source_kind="data", source="data:image/png;base64,AA==")
+            artifacts.upsert(session_id=opened["session_id"], provider="first", conversation_url=opened["conversation_url"], descriptor={"id": artifact_id, "kind": "image", "provider": "first", "turn_id": "turn-1", "index": 0, "mime_type": "image/png"}, source_kind="blob", source="blob:https://first.example/stale")
             await manager.close_session(provider="first", session_id=opened["session_id"])
-            waited = await manager.wait_artifact(artifact_id, timeout_ms=1_000)
+            with tempfile.TemporaryDirectory() as output_dir:
+                materialized = await manager.get_artifact(artifact_id, output=f"{output_dir}/image.png")
             saved = manager.store.get(opened["session_id"], "first")
 
-        self.assertFalse(snapshot["snapshot"]["generating"])
-        self.assertEqual(trace["trace"]["request_id"], "request-1")
-        self.assertTrue(waited["ready"])
+        self.assertEqual(materialized["id"], artifact_id)
+        self.assertEqual(materialized["mime_type"], "image/png")
         self.assertFalse(saved["active"])
         self.assertEqual([method for method, _ in transport.calls].count("close_tab"), 2)
+        self.assertIn("get_artifact", [method for method, _ in transport.calls])

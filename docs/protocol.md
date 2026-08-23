@@ -10,8 +10,9 @@ Web LLM Bridge has two local protocols:
 
 Both are loopback-only IPC. Neither is a public remote API. The current
 extension protocol version is `2`, and both transports cap a message at 8 MiB.
-Version 2 adds Session lifecycle RPCs and bounded Artifact transfer events;
-older Extensions are rejected during the handshake.
+Version `2` is unchanged by this refactor. It carries the reduced public
+surface and bounded Artifact transfer events; older Extensions are rejected
+during the handshake.
 
 ## Broker NDJSON
 
@@ -66,7 +67,6 @@ Parameters:
 | `new` | Boolean; defaults to `false`. If true, `url` and `session_id` must be absent. |
 | `url` | Optional provider HTTPS URL. Mutually exclusive with `session_id`. |
 | `session_id` | Optional existing session ID. |
-| `reopen_on_closed` | Optional boolean. `null`/omitted preserves a stored policy; otherwise it replaces it. |
 
 When no explicit target is supplied, the active record for the provider is
 used if present; otherwise the provider default URL is opened. `new: true`
@@ -79,10 +79,8 @@ Result fields:
 {
   "session_id": "3d1f...",
   "provider": "chatgpt",
-  "tab_id": 42,
   "conversation_url": "https://chatgpt.com/c/example",
-  "sequence": 0,
-  "reopen_on_closed": false
+  "sequence": 0
 }
 ```
 
@@ -94,11 +92,8 @@ the provider default URL. The result is the session descriptor above plus a
 non-empty string `text` containing the final serialized assistant response.
 
 `sequence` is incremented before browser dispatch, even if the operation later
-fails. Callers must not use it as submission proof.
-
-A successful chat result also contains the Extension request ID (`request_id`).
-It is intended for a subsequent `debug_trace` call and is not proof that the
-Prompt was submitted.
+fails. Callers must not use it as submission proof. Transport request IDs stay
+inside the two IPC layers and are never returned in a business result.
 
 #### `get_messages`
 
@@ -132,10 +127,8 @@ historical turn.
 #### `list_sessions`
 
 The optional `provider` string filters records. The result is
-`{"sessions":[...]}`. Each record contains `version`, `provider`, `session_id`,
-`tab_id`, `current_url`, `created_at`, `updated_at`, `sequence`, `active`, and
-`reopen_on_closed`. This method returns store records, so the URL field is
-`current_url`, not `conversation_url`.
+`{"sessions":[...]}`. Each public record contains only `provider`,
+`session_id`, `conversation_url`, and `sequence`.
 
 #### `close_session`
 
@@ -159,34 +152,10 @@ descriptor contains `id`, `kind`, `provider`, `turn_id`, `index`, `mime_type`,
 `width`, `height`, `alt`, and `quality`; source URLs and DOM selectors are
 never part of the public result. A pure image reply may have `text: ""`.
 
-#### `debug_snapshot`
-
-Returns a sanitized DOM/Artifact snapshot for the bound tab. The result contains
-only the page origin/path, prompt presence/visibility/text length, message
-counts, the last assistant turn ID and text hash, generation/completion state,
-revision, and Artifact readiness, dimensions, source kind, and source hash. It
-never returns full HTML, prompt text, cookies, tokens, signed URLs, data URIs,
-or blob contents. It uses the same Browser Bootstrap and Session rebind path as
-other browser operations.
-The snapshot also lists recently retained Trace IDs so a client can locate the
-same request when its final chat response was lost.
-
-#### `debug_trace`
-
-Parameters are `provider`, optional `session_id`, and required `request_id`.
-The result reads the in-memory bounded trace for that chat request. Events are
-`before_send`, `submitted`, `assistant_node_seen`, `artifact_seen`,
-`artifact_ready`, `completion_candidate`, `completed`, or
-`chat_state_unknown`. Traces are not persisted and are cleared when the
-Extension is reloaded.
-
-#### `wait_artifact`
-
-Parameters are a required `artifact_id` and optional `timeout_ms` from 1000
-through 300000 (default 60000). It only waits for an existing Artifact
-descriptor to become ready and never resubmits the Prompt. A closed Session is
-temporarily restored and closed again afterward, preserving `active: false`.
-Timeout returns `ARTIFACT_NOT_READY`.
+`get_artifact` performs the complete internal flow: it resolves the Provider
+turn/index reference, polls readiness with a fixed internal upper bound,
+refreshes an expired source when necessary, and transfers bounded chunks. The
+public method has no timeout parameter and never accepts an arbitrary URL.
 
 ## Broker progress
 
@@ -251,9 +220,9 @@ The Broker sends:
 {"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"Hello"}}
 ```
 
-Supported internal methods are `open`, `chat`, `get_messages`, `debug_snapshot`,
-`debug_trace`, `wait_artifact`, `close_tab`, `resolve_artifact`, and
-`get_artifact`. A response is
+Supported internal methods are `open`, `close_tab`, `chat`, `get_messages`, and
+`get_artifact`. Provider adapters retain `resolveArtifact(turn_id, index)` as
+an internal lookup used by `get_artifact`; it is not an RPC method. A response is
 either:
 
 ```json
@@ -302,8 +271,7 @@ Current Broker-facing error codes include:
 | Page operation | `PAGE_NOT_READY`, `INPUT_FAILED`, `BUSY`, `SEND_FAILED` |
 | Ambiguous chat | `CHAT_STATE_UNKNOWN` |
 | Time and size | `RPC_TIMEOUT`, `RESPONSE_TIMEOUT`, `RESPONSE_TOO_LARGE`, `ARTIFACT_TOO_LARGE` |
-| Artifact | `ARTIFACT_NOT_FOUND`, `ARTIFACT_NOT_READY`, `ARTIFACT_UNAVAILABLE`, `ARTIFACT_TRANSFER_FAILED`, `ARTIFACT_INVALID_TYPE`, `ARTIFACT_SOURCE_EXPIRED`, `ARTIFACT_WRITE_FAILED` |
-| Debugging | `DEBUG_TRACE_NOT_FOUND` |
+| Artifact | `ARTIFACT_NOT_FOUND`, `ARTIFACT_NOT_READY`, `ARTIFACT_UNAVAILABLE`, `ARTIFACT_TRANSFER_FAILED`, `ARTIFACT_INVALID_TYPE`, `ARTIFACT_WRITE_FAILED` |
 | Fallback | `INTERNAL_ERROR` |
 
 `PROMPT_NOT_FOUND` and `SEND_BUTTON_NOT_FOUND` are internal content-runtime

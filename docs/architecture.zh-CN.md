@@ -50,8 +50,8 @@ content runtime ---- provider adapter ---- 已认证网页
 ### Client 与 Session 句柄
 
 `WebLLMClient` 每次连接发送一个 Broker RPC。`WebLLMSession` 是轻量的 Broker-backed
-句柄，只包含 `provider`、`session_id`、`conversation_url` 和
-`reopen_on_closed`。它不拥有标签页、WebSocket、Broker 进程或凭据。退出其异步上下文
+句柄，只包含 `provider`、`session_id` 和 `conversation_url`。它不拥有标签页、WebSocket、
+Broker 进程或凭据。退出其异步上下文
 不会关闭任何共享资源。
 
 `close_session` 只关闭持久化 Session 绑定的标签页，并保留 Conversation URL 和
@@ -84,11 +84,12 @@ Broker 不会主动持久化 Prompt 或回复正文，也不是远程代理。
 ### Session 与 SessionStore
 
 Session 是可持久化的绑定记录，不是网页 Conversation 的副本。Store 保存 schema
-version、Provider ID、Session ID、tab ID、当前 URL、创建/更新时间、sequence、active
-状态和 `reopen_on_closed`。每个 Provider 最多有一条 active 记录。
+version、Provider ID、Session ID、tab ID、当前 URL、创建/更新时间、sequence 和 active
+状态；读取旧 JSON 时按当前精简结构归一化。每个 Provider 最多有一条 active 记录。
 
 每次 Chat 分派前，`sequence` 都会先递增并持久化。因此它统计 Chat 尝试，包括随后失败
-的尝试；它不能证明页面已经接受消息。
+的尝试；它不能证明页面已经接受消息。公共结果不会暴露 `tab_id`、`active`、Transport
+`request_id` 或 Artifact 私有来源。
 
 Store 不包含消息正文或认证材料。删除本地 registry 不会删除 Provider 网站中的
 Conversation。
@@ -172,9 +173,8 @@ Chat 是具有副作用的操作。开始向 content script 分派后，标签�
 `safe_to_retry: false`。`SessionManager` 和 Client 都不会自动重发 Prompt。
 
 如果在 content script 分派前已确认标签页关闭，Extension 可以返回
-`TAB_CLOSED`，并设置 `safe_to_retry: true`。启用 `reopen_on_closed` 后，
-`get_messages` 会重新绑定并重试一次。对于 `chat`，Manager 可以为后续操作重新绑定，
-但仍抛出原始错误，绝不会重放 Prompt。
+`TAB_CLOSED`，并设置 `safe_to_retry: true`。Manager 会在下一次操作前统一重新绑定失效
+标签页。对于 `chat`，分派后的失败仍返回状态歧义，绝不会重放 Prompt。
 
 即使 `safe_to_retry` 为 true，错误仍然是失败。该字段只表示：在产生错误的边界上，已知
 重复执行同一个 RPC 不会复制页面侧副作用。

@@ -25,6 +25,7 @@
       pageReadyTimeoutMs: 30_000,
       buttonReadyTimeoutMs: 30_000,
       submissionConfirmationTimeoutMs: 60_000,
+      artifactReadyTimeoutMs: 60_000,
       historyLoadTimeoutMs: 60_000,
       historyPollIntervalMs: 250,
     },

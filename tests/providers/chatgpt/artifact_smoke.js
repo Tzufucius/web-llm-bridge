@@ -44,7 +44,8 @@ async function run() {
     },
     execCommand: () => false,
   };
-  const { listeners } = loadContentRuntime({ document, timingOverrides: { stableTimeMs: 20, completionConfirmationMs: 40, responseIdleTimeoutMs: 400 } });
+  const transferEvents = [];
+  const { context, listeners } = loadContentRuntime({ document, progress: transferEvents, timingOverrides: { stableTimeMs: 20, completionConfirmationMs: 40, responseIdleTimeoutMs: 400 } });
   const response = await new Promise((resolve) => listeners[0]({ method: "chat", text: "生成图片", request_id: "artifact" }, {}, resolve));
   assert.equal(response.ok, true);
   assert.equal(response.result.text, "");
@@ -52,6 +53,15 @@ async function run() {
   assert.equal(response.result.artifacts[0].kind, "image");
   assert.equal(response.result.artifacts[0].turn_id, "turn-image");
   assert.equal(response.result.artifacts[0]._source, "https://cdn.example/generated-large.png");
+  assert.equal("id" in response.result.artifacts[0], false);
+  const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  context.btoa = (binary) => Buffer.from(binary, "binary").toString("base64");
+  context.fetch = async () => ({ ok: true, headers: { get: () => "image/png" }, arrayBuffer: async () => bytes.buffer });
+  const artifact = { id: "img_test", ...response.result.artifacts[0] };
+  const transfer = await new Promise((resolve) => listeners[0]({ method: "get_artifact", request_id: "transfer", artifact }, {}, resolve));
+  assert.equal(transfer.ok, true);
+  assert.equal(transfer.result.transferred, true);
+  assert.ok(transferEvents.some((event) => event.type === "artifact_start"));
 }
 
 run().catch((error) => { console.error(error); process.exitCode = 1; });

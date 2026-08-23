@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import hashlib
 from typing import Any, Mapping
 
@@ -36,7 +36,6 @@ class ArtifactRecord:
     source_kind: str = ""
     source: str = ""
     created_at: str = ""
-    extra: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def descriptor(self) -> dict[str, Any]:
@@ -52,9 +51,6 @@ class ArtifactRecord:
             "alt": self.alt,
             "quality": self.quality,
         }
-        for key, item in self.extra.items():
-            if key not in value and key not in {"source", "source_kind", "session_id", "conversation_url"}:
-                value[key] = item
         return value
 
     def to_json(self) -> dict[str, Any]:
@@ -93,5 +89,4 @@ class ArtifactRecord:
             source_kind=str(value.get("source_kind") or ""),
             source=str(value.get("source") or ""),
             created_at=str(value.get("created_at") or ""),
-            extra={key: item for key, item in value.items() if key not in {"id", "kind", "provider", "session_id", "conversation_url", "turn_id", "index", "mime_type", "width", "height", "alt", "quality", "source_kind", "source", "created_at"}},
         )

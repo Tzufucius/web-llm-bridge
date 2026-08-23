@@ -28,16 +28,16 @@ A Python provider does **not** implement `open`, `chat`, `get_messages`, or
 or runtime connection state. `SessionManager` owns these operations and calls
 the one shared `ExtensionTransport` with the provider ID.
 
-### Session: durable binding and policy
+### Session: durable binding and recovery
 
 Session code owns record selection, the global operation lock, metadata
-persistence, sequence increments, and the explicit `reopen_on_closed` policy.
+persistence, and sequence increments. The manager exposes only the supported
+session operations and keeps tab bindings private.
 It does not know prompt selectors or how a site represents messages.
 
-Recovery must respect side effects. `get_messages` may rebind and retry once
-after a pre-dispatch `TAB_CLOSED` when the policy is enabled. `chat` may prepare
-a new binding for later calls but must never replay the original prompt after an
-error.
+Recovery must respect side effects. Stale tabs are rebound before the next
+pre-dispatch operation. `chat` may prepare a new binding for later calls but
+must never replay the original prompt after an error.
 
 ### Transport: one connection owner
 
@@ -240,8 +240,9 @@ browser extension.
 ### Artifact contract
 
 Providers that expose media may implement `adapter.getArtifacts(messageNode)`
-and `adapter.resolveArtifact(ref)`. The first method returns bounded,
-provider-neutral descriptors plus private source fields for Broker persistence;
-the second re-resolves a `(turn_id, index)` reference when a signed source has
-expired. Public results must not contain CSS selectors, `outerHTML`, React
-internals, credentials, or complete data URIs.
+and `adapter.resolveArtifact({turn_id, index})`. The first method returns the
+minimal descriptor (`kind`, turn/index, MIME, dimensions, alt, quality, ready)
+plus private source fields for Broker persistence. The second re-resolves a
+turn/index reference when a signed source has expired; it is called internally
+by `get-artifact`, not exposed as an RPC. Public results must not contain CSS
+selectors, `outerHTML`, React internals, credentials, or complete data URIs.
