@@ -24,12 +24,36 @@ class WebLLMClient:
     async def open(self, *, provider: str = "chatgpt", new: bool = False, url: str | None = None, session_id: str | None = None, reopen_on_closed: bool | None = None) -> dict[str, Any]:
         return await self.call("open", {"provider": provider, "new": new, "url": url, "session_id": session_id, "reopen_on_closed": reopen_on_closed})
 
+    async def chat(self, text: str, *, provider: str = "chatgpt", session_id: str | None = None, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+        return await self.call("chat", {"provider": provider, "session_id": session_id, "text": text}, progress=progress)
+
+    async def get_messages(self, *, provider: str = "chatgpt", session_id: str | None = None, limit: int | None = None, full: bool = False) -> dict[str, Any]:
+        return await self.call("get_messages", {"provider": provider, "session_id": session_id, "limit": limit, "full": full})
+
+    async def debug_snapshot(self, *, provider: str = "chatgpt", session_id: str | None = None) -> dict[str, Any]:
+        return await self.call("debug_snapshot", {"provider": provider, "session_id": session_id})
+
+    async def debug_trace(self, request_id: str, *, provider: str = "chatgpt", session_id: str | None = None) -> dict[str, Any]:
+        return await self.call("debug_trace", {"provider": provider, "session_id": session_id, "request_id": request_id})
+
     async def list_sessions(self, *, provider: str | None = None) -> list[dict[str, Any]]:
         result = await self.call("list_sessions", {"provider": provider} if provider else {})
         sessions = result.get("sessions")
         if not isinstance(sessions, list):
             raise WebLLMBridgeError("Broker 返回无效会话列表", "INVALID_RESPONSE")
         return sessions
+
+    async def close_session(self, session_id: str, *, provider: str = "chatgpt") -> dict[str, Any]:
+        return await self.call("close_session", {"provider": provider, "session_id": session_id})
+
+    async def forget_session(self, session_id: str, *, provider: str = "chatgpt") -> dict[str, Any]:
+        return await self.call("forget_session", {"provider": provider, "session_id": session_id})
+
+    async def get_artifact(self, artifact_id: str, *, output: str | None = None) -> dict[str, Any]:
+        return await self.call("get_artifact", {"artifact_id": artifact_id, "output": output})
+
+    async def wait_artifact(self, artifact_id: str, *, timeout_ms: int = 60_000) -> dict[str, Any]:
+        return await self.call("wait_artifact", {"artifact_id": artifact_id, "timeout_ms": timeout_ms})
 
 
 async def rpc_call(method: str, params: dict[str, Any], *, progress: Callable[[dict[str, Any]], None] | None = None, host: str = BRIDGE_HOST, port: int = BROKER_PORT) -> dict[str, Any]:

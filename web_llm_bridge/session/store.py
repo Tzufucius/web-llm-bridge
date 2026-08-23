@@ -162,6 +162,26 @@ class SessionStore:
             raise KeyError(session_id)
         return self.upsert(existing, **fields)
 
+    def delete(self, session_id: str) -> bool:
+        """删除持久化会话，并原子重写索引；删除不存在的会话是幂等的。"""
+        records = self._records()
+        if session_id not in records:
+            # 即使记录已损坏或仅残留在磁盘，也清理受控的目标路径。
+            try:
+                self._path(session_id).unlink()
+            except (OSError, ValueError):
+                pass
+            if self.index_path.exists():
+                self._persist(records)
+            return False
+        records.pop(session_id, None)
+        try:
+            self._path(session_id).unlink()
+        except FileNotFoundError:
+            pass
+        self._persist(records)
+        return True
+
     def deactivate_all(self) -> int:
         records = self._records()
         changed = 0

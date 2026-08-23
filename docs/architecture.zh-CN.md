@@ -54,8 +54,15 @@ content runtime ---- provider adapter ---- 已认证网页
 `reopen_on_closed`。它不拥有标签页、WebSocket、Broker 进程或凭据。退出其异步上下文
 不会关闭任何共享资源。
 
-当前协议没有公共 `close` RPC。`SessionManager.close()` 只在 Broker 退出时用于关闭
-Broker 所有的 Transport。
+`close_session` 只关闭持久化 Session 绑定的标签页，并保留 Conversation URL 和
+sequence。`forget_session` 进一步删除本地元数据；两者都不会删除云端 Conversation。
+`SessionManager.close()` 仍只在 Broker 退出时用于关闭 Broker 所有的 Transport。
+
+浏览器自动启动位于 CLI 之下。执行浏览器 RPC 前，Manager 会启动 Extension 监听器，
+等待短暂的 reconnect grace；若 Extension 尚未完成 WebSocket 握手，则在单一异步启动
+锁内打开配置的日常浏览器。浏览器进程是否存在不是 readiness 判据。新 Prompt 提交前
+按 Conversation URL 恢复 Session 绑定；提交后错误保持 at-most-once 语义，不自动重放
+Prompt。
 
 ### Broker 与 SessionManager
 
@@ -117,6 +124,14 @@ Extension provider 提供站点特有的元数据和行为：
 - ChatGPT KaTeX 提取等特殊序列化。
 
 扩展不需要密码、Cookie、Token、私有 Conversation API、DevTools/CDP 或剪贴板权限。
+
+### Artifact 层
+
+Provider Adapter 将图片作为稳定 Artifact descriptor 暴露。Broker 在本地保存私有
+source 元数据，只返回 `id`、`kind`、`turn_id`、尺寸、MIME 和 quality 等
+Provider-neutral 字段。只有 `get-artifact` 才获取字节：公开 HTTPS 使用 stdlib 下载，
+`data:` 本地解码，`blob:` 由 Content Script 按 256 KiB 分块传输。传输会校验大小和
+MIME，计算 SHA-256，并通过原子 rename 写入 Artifact Store。
 
 ## 依赖方向
 

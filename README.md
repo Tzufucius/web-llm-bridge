@@ -75,6 +75,10 @@ web-llm-broker serve
 
 The installed `web-llm-agent` launcher can also start or reuse a local Broker when needed. The module fallback is `python -m web_llm_bridge.broker.server serve`.
 
+When a browser RPC is required, the Broker can start or wake the configured
+daily browser and wait for the Extension handshake. Persisted sessions can be
+closed and restored, and image Artifacts can be materialized as local files.
+
 ### Scripts
 
 The [`scripts/`](scripts/) directory provides cross-platform Python launchers:
@@ -127,6 +131,15 @@ Read recent messages or list persisted sessions:
 ```console
 web-llm-agent get-messages --limit 5 --json
 web-llm-agent list-sessions --json
+```
+
+Close or forget a persisted Session, or fetch an image Artifact discovered by a
+ChatGPT reply:
+
+```console
+web-llm-agent close-session --session-id SESSION_ID --json
+web-llm-agent forget-session --session-id SESSION_ID --json
+web-llm-agent get-artifact --id ARTIFACT_ID --json
 ```
 
 With `--json`, stdout is one machine-readable JSON object and progress or diagnostics go to stderr.

@@ -30,6 +30,18 @@ checking that repeating the operation is appropriate.
   uncertain prompt safe to replay.
 - `RESPONSE_TIMEOUT`: the final response was not observed within the runtime
   window; inspect the Conversation before retrying.
+- `BROWSER_LAUNCH_FAILED`: the configured browser could not be started.
+- `BROWSER_EXTENSION_NOT_CONNECTED`: the browser started but the Extension did
+  not complete its handshake within the configured window.
+- `ARTIFACT_NOT_FOUND`: the local Artifact descriptor is unavailable, commonly
+  after `forget-session`.
+- `ARTIFACT_NOT_READY`: an Artifact was found but did not become ready before
+  the bounded `wait-artifact` timeout.
+- `ARTIFACT_TOO_LARGE`, `ARTIFACT_INVALID_TYPE`, `ARTIFACT_TRANSFER_FAILED`,
+  `ARTIFACT_WRITE_FAILED`: Artifact materialization was rejected or failed;
+  do not replace it with an arbitrary URL downloader.
+- `DEBUG_TRACE_NOT_FOUND`: the requested in-memory debug trace is unavailable,
+  commonly because the Extension was reloaded or the trace ring buffer rotated.
 
 For `CHAT_STATE_UNKNOWN`, the local Agent **MUST NOT** call `chat` again with
 the original Prompt before running:

@@ -36,6 +36,8 @@ Declared capabilities are:
 | `markdown` | `true` |
 | `latex` | `true` |
 | `persistentConversation` | `true` |
+| `artifacts` | `true` |
+| `images` | `true` |
 
 These capabilities describe browser-DOM behavior. They do not imply API-level
 delivery guarantees or perfect reconstruction of virtualized history.
@@ -125,9 +127,10 @@ includes elapsed and idle milliseconds and is never a completion signal.
 
 A response completes only when all of the following hold:
 
-- the latest assistant has non-empty text;
+- the latest assistant has non-empty text or at least one ready Artifact;
 - no active generation is detected;
-- raw assistant text and effective page activity are stable for 1.5 seconds;
+- assistant text, Artifact signature, and effective page activity are stable for
+  1.5 seconds;
 - the serialized candidate remains unchanged for 3 seconds; and
 - a final serialization of the current assistant node equals that candidate.
 
@@ -135,6 +138,20 @@ Completion-marker changes reset the candidate confirmation, but the marker is
 not required to exist and its presence alone is not sufficient. If no effective
 page activity occurs for five consecutive minutes, the runtime returns
 `RESPONSE_TIMEOUT`, never partial text as success.
+
+## Artifact extraction and debugging
+
+Images are extracted only from assistant turns. Avatars, favicons, icons, tool
+icons, decorative elements, loading placeholders, and user-uploaded images are
+filtered. Sources are selected in this order: original/download resource,
+original link, largest `srcset`, `currentSrc`, `src`, `data:`, then `blob:`;
+quality is `unknown` when the original cannot be confirmed.
+
+`debug-snapshot` returns a sanitized page snapshot and `debug-trace` returns the
+in-memory event trace for one chat request. Neither exposes full DOM, prompt
+text, cookies, tokens, signed URLs, or image bytes. After generation, use
+`wait-artifact` until the descriptor is ready, then use `get-artifact` by ID;
+arbitrary URLs are never accepted.
 
 ## History behavior
 
@@ -199,7 +216,7 @@ ChatGPT locale, account/feature tier relevant to the run, page URL class, and
 date.
 
 1. Load the unpacked Manifest V3 extension, start the Broker, and confirm the
-   extension completes protocol version 1 handshake.
+   extension completes protocol version 2 handshake.
 2. Open `https://chatgpt.com/`; call `open`, then send a short prompt. Confirm the
    URL updates when ChatGPT navigates to `/c/...` and only one final response is
    returned.
@@ -226,3 +243,10 @@ date.
 Last synthetic verification: 2026-08-22, Chrome/Edge Manifest V3 DOM smoke
 fixtures. A real signed-in end-to-end pass is still required before claiming a
 specific current ChatGPT page release as verified.
+
+Assistant images are collected only from the Assistant turn. Avatars, icons,
+loading placeholders, and user-uploaded images are ignored. Source selection
+prefers an explicit original/download resource, then an original link, the
+largest `srcset` candidate, `currentSrc`, `src`, `data:`, and finally `blob:`.
+The adapter returns stable `(turn_id, index)` references and reports image
+readiness in its internal signature so image-only replies can complete safely.

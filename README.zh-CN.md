@@ -75,6 +75,8 @@ web-llm-broker serve
 
 安装后的 `web-llm-agent` 入口在需要时也会启动或复用本机 Broker。模块备用命令是 `python -m web_llm_bridge.broker.server serve`。
 
+需要浏览器 RPC 时，Broker 可以启动或唤醒配置的日常浏览器，并等待 Extension 握手。持久化 Session 可以关闭和恢复，图片 Artifact 可以获取为本地文件。
+
 ### Scripts
 
 [`scripts/`](scripts/) 目录提供跨平台 Python 启动脚本：
@@ -127,6 +129,14 @@ cat prompt.md | web-llm-agent chat --stdin --json
 ```console
 web-llm-agent get-messages --limit 5 --json
 web-llm-agent list-sessions --json
+```
+
+关闭或遗忘持久化 Session，或获取 ChatGPT 回复中的图片 Artifact：
+
+```console
+web-llm-agent close-session --session-id SESSION_ID --json
+web-llm-agent forget-session --session-id SESSION_ID --json
+web-llm-agent get-artifact --id ARTIFACT_ID --json
 ```
 
 指定 `--json` 后，stdout 始终输出一个可供机器解析的 JSON 对象，进度和诊断信息输出到 stderr。

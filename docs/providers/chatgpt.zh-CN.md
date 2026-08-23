@@ -32,6 +32,8 @@ Chrome 或 Edge 120 及以上版本。
 | `markdown` | `true` |
 | `latex` | `true` |
 | `persistentConversation` | `true` |
+| `artifacts` | `true` |
+| `images` | `true` |
 
 这些 capability 描述浏览器 DOM 行为，不表示具有 API 级投递保证，也不保证能完美重建
 虚拟化历史。
@@ -113,15 +115,25 @@ Status 元素不会在自身相关状态未变化时反复重置活动。
 
 只有同时满足以下全部条件，回复才会完成：
 
-- 最新 Assistant 包含非空文本；
+- 最新 Assistant 包含非空文本，或包含至少一个 ready Artifact；
 - 未检测到活动生成；
-- Assistant 原始文本和有效页面活动稳定 1.5 秒；
+- Assistant 文本、Artifact signature 和有效页面活动稳定 1.5 秒；
 - 序列化候选保持不变 3 秒；
 - 最后一次重新序列化当前 Assistant 节点的结果与候选一致。
 
 Completion-marker 变化会重置候选确认，但 marker 不要求必须存在，仅有 marker 也不足以
 证明完成。如果连续 5 分钟没有有效页面活动，Runtime 返回 `RESPONSE_TIMEOUT`，绝不会
 把半截文本作为成功结果。
+
+## Artifact 与调试
+
+图片只从 Assistant turn 提取。头像、favicon、图标、工具图标、装饰元素、loading
+placeholder 和用户上传图片会被过滤。source 按原图/下载资源、原图链接、最大 `srcset`、
+`currentSrc`、`src`、`data:`、`blob:` 的顺序选择；无法确认质量时使用 `unknown`。
+
+`debug-snapshot` 返回脱敏页面快照，`debug-trace` 返回单次 Chat 的内存事件轨迹，均不
+返回完整 DOM、Prompt、Cookie、Token、signed URL 或图片内容。图片生成后先用
+`wait-artifact` 等待 ready，再用 `get-artifact` 按 Artifact ID 落盘；不能直接下载任意 URL。
 
 ## 历史行为
 
@@ -174,7 +186,7 @@ annotation 的 MathJax 结构，以及当前 DOM 未暴露的内容。未知元�
 使用不敏感内容，并记录 Chrome/Edge 版本、Extension commit、ChatGPT Locale、与本次运行
 相关的 Account/Feature Tier、页面 URL 类别和日期。
 
-1. 加载 unpacked Manifest V3 Extension，启动 Broker，确认 Extension 完成协议版本 1
+1. 加载 unpacked Manifest V3 Extension，启动 Broker，确认 Extension 完成协议版本 2
    握手。
 2. 打开 `https://chatgpt.com/`，调用 `open` 后发送短 Prompt。确认 ChatGPT 导航到
    `/c/...` 时 URL 得到更新，且只返回一条最终响应。
@@ -197,3 +209,8 @@ annotation 的 MathJax 结构，以及当前 DOM 未暴露的内容。未知元�
 
 最近一次合成验证：2026-08-22，Chrome/Edge Manifest V3 DOM smoke fixture。在声称特定
 当前 ChatGPT 页面版本通过验证前，仍需执行真实登录态端到端测试。
+
+图片只从 Assistant turn 中提取。头像、图标、loading placeholder 和用户上传图片
+会被过滤。source 优先使用明确的原图/下载资源，其次是原图链接、最大 `srcset`、
+`currentSrc`、`src`、`data:`，最后是 `blob:`。Adapter 返回稳定的 `(turn_id, index)`
+引用，并在内部签名中记录图片 readiness，使纯图片回复可以安全完成。

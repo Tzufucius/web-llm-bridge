@@ -9,7 +9,9 @@ Web LLM Bridge has two local protocols:
   `ws://127.0.0.1:8765`.
 
 Both are loopback-only IPC. Neither is a public remote API. The current
-extension protocol version is `1`, and both transports cap a message at 8 MiB.
+extension protocol version is `2`, and both transports cap a message at 8 MiB.
+Version 2 adds Session lifecycle RPCs and bounded Artifact transfer events;
+older Extensions are rejected during the handshake.
 
 ## Broker NDJSON
 
@@ -94,6 +96,10 @@ non-empty string `text` containing the final serialized assistant response.
 `sequence` is incremented before browser dispatch, even if the operation later
 fails. Callers must not use it as submission proof.
 
+A successful chat result also contains the Extension request ID (`request_id`).
+It is intended for a subsequent `debug_trace` call and is not proof that the
+Prompt was submitted.
+
 #### `get_messages`
 
 Parameters are `provider`, optional `session_id`, `full`, and `limit`:
@@ -131,7 +137,56 @@ The optional `provider` string filters records. The result is
 `reopen_on_closed`. This method returns store records, so the URL field is
 `current_url`, not `conversation_url`.
 
-There is no public `close` method in protocol version 1.
+#### `close_session`
+
+Requires `session_id`. The Broker closes only the Tab currently bound to that
+Session, treats an already closed Tab as an idempotent success, preserves the
+Conversation URL and sequence, and marks the local record inactive.
+
+#### `forget_session`
+
+Requires `session_id`. The Broker closes the bound Tab and removes local Session
+metadata. It does not delete or archive the provider Conversation.
+
+#### `get_artifact`
+
+Requires an Artifact `artifact_id` and optionally accepts an output path. The
+caller cannot provide an arbitrary URL. The result contains an absolute local
+path, MIME type, byte size, SHA-256, and quality.
+
+Chat and history responses may contain an additive `artifacts` array. An image
+descriptor contains `id`, `kind`, `provider`, `turn_id`, `index`, `mime_type`,
+`width`, `height`, `alt`, and `quality`; source URLs and DOM selectors are
+never part of the public result. A pure image reply may have `text: ""`.
+
+#### `debug_snapshot`
+
+Returns a sanitized DOM/Artifact snapshot for the bound tab. The result contains
+only the page origin/path, prompt presence/visibility/text length, message
+counts, the last assistant turn ID and text hash, generation/completion state,
+revision, and Artifact readiness, dimensions, source kind, and source hash. It
+never returns full HTML, prompt text, cookies, tokens, signed URLs, data URIs,
+or blob contents. It uses the same Browser Bootstrap and Session rebind path as
+other browser operations.
+The snapshot also lists recently retained Trace IDs so a client can locate the
+same request when its final chat response was lost.
+
+#### `debug_trace`
+
+Parameters are `provider`, optional `session_id`, and required `request_id`.
+The result reads the in-memory bounded trace for that chat request. Events are
+`before_send`, `submitted`, `assistant_node_seen`, `artifact_seen`,
+`artifact_ready`, `completion_candidate`, `completed`, or
+`chat_state_unknown`. Traces are not persisted and are cleared when the
+Extension is reloaded.
+
+#### `wait_artifact`
+
+Parameters are a required `artifact_id` and optional `timeout_ms` from 1000
+through 300000 (default 60000). It only waits for an existing Artifact
+descriptor to become ready and never resubmits the Prompt. A closed Session is
+temporarily restored and closed again afterward, preserving `active: false`.
+Timeout returns `ARTIFACT_NOT_READY`.
 
 ## Broker progress
 
@@ -179,10 +234,10 @@ guaranteed to arrive as a JSON error.
 The extension starts with:
 
 ```json
-{"type":"hello","protocol_version":1}
+{"type":"hello","protocol_version":2}
 ```
 
-The Broker responds with `{"type":"hello_ack","protocol_version":1}`. An
+The Broker responds with `{"type":"hello_ack","protocol_version":2}`. An
 incompatible hello receives an `error` message with code
 `INCOMPATIBLE_PROTOCOL`; a second active extension receives
 `EXTENSION_ALREADY_CONNECTED`. The extension also sends `ping`, to which the
@@ -196,7 +251,9 @@ The Broker sends:
 {"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"Hello"}}
 ```
 
-Supported internal methods are `open`, `chat`, and `get_messages`. A response is
+Supported internal methods are `open`, `chat`, `get_messages`, `debug_snapshot`,
+`debug_trace`, `wait_artifact`, `close_tab`, `resolve_artifact`, and
+`get_artifact`. A response is
 either:
 
 ```json
@@ -212,6 +269,12 @@ or:
 Progress uses the same transport ID and includes `tab_id`, `url`, `provider`,
 `phase`, `elapsed_ms`, and `idle_ms`. This WebSocket contract is internal: a
 provider change may update it together with extension and protocol tests.
+
+For blob Artifacts, the Extension emits `artifact_start`, ordered
+`artifact_chunk` messages containing base64-encoded 256 KiB raw chunks, and an
+`artifact_end`, all correlated by the request ID. The Broker rejects duplicate
+or missing sequences, invalid base64, size mismatches, and transfers above the
+50 MiB Artifact limit before writing the file.
 
 ## Errors and retry safety
 
@@ -235,10 +298,12 @@ Current Broker-facing error codes include:
 | --- | --- |
 | Envelope and arguments | `INVALID_JSON`, `INVALID_REQUEST`, `INVALID_ARGUMENT`, `UNKNOWN_METHOD` |
 | Provider/session selection | `PROVIDER_NOT_FOUND`, `SESSION_NOT_FOUND`, `INVALID_URL` |
-| Extension availability | `EXTENSION_NOT_CONNECTED`, `TAB_CLOSED`, `CONTENT_SCRIPT_UNAVAILABLE` |
+| Extension availability | `EXTENSION_NOT_CONNECTED`, `BROWSER_LAUNCH_FAILED`, `BROWSER_EXTENSION_NOT_CONNECTED`, `TAB_CLOSED`, `CONTENT_SCRIPT_UNAVAILABLE` |
 | Page operation | `PAGE_NOT_READY`, `INPUT_FAILED`, `BUSY`, `SEND_FAILED` |
 | Ambiguous chat | `CHAT_STATE_UNKNOWN` |
-| Time and size | `RPC_TIMEOUT`, `RESPONSE_TIMEOUT`, `RESPONSE_TOO_LARGE` |
+| Time and size | `RPC_TIMEOUT`, `RESPONSE_TIMEOUT`, `RESPONSE_TOO_LARGE`, `ARTIFACT_TOO_LARGE` |
+| Artifact | `ARTIFACT_NOT_FOUND`, `ARTIFACT_NOT_READY`, `ARTIFACT_UNAVAILABLE`, `ARTIFACT_TRANSFER_FAILED`, `ARTIFACT_INVALID_TYPE`, `ARTIFACT_SOURCE_EXPIRED`, `ARTIFACT_WRITE_FAILED` |
+| Debugging | `DEBUG_TRACE_NOT_FOUND` |
 | Fallback | `INTERNAL_ERROR` |
 
 `PROMPT_NOT_FOUND` and `SEND_BUTTON_NOT_FOUND` are internal content-runtime

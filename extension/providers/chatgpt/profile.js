@@ -13,6 +13,8 @@
       markdown: true,
       latex: true,
       persistentConversation: true,
+      artifacts: true,
+      images: true,
     }),
     timing: {
       stableTimeMs: 1_500,

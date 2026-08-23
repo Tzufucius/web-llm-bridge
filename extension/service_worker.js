@@ -9,7 +9,7 @@ importScripts(
 );
 
 const BRIDGE_URL = "ws://127.0.0.1:8765";
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 10_000;
@@ -26,7 +26,8 @@ let rpc;
 
 async function routeRequest(method, params, requestId) {
   if (method === "open") return tabs.attach(params);
-  if (method === "get_messages" || method === "chat") {
+  if (method === "close_tab") return tabs.close(params?.tab_id);
+  if (method === "get_messages" || method === "chat" || method === "resolve_artifact" || method === "get_artifact" || method === "debug_snapshot" || method === "debug_trace" || method === "wait_artifact") {
     return tabs.request(method, { ...params, request_id: requestId });
   }
   throw bridge.error("INTERNAL_ERROR", `未知 RPC 方法：${method}`);
@@ -58,6 +59,11 @@ rpc = bridge.createRpcClient({
 
 const PROGRESS_PHASES = new Set(["submitted", "thinking", "working", "tool_call", "streaming"]);
 chrome.runtime.onMessage.addListener((message, sender) => {
+  if (["artifact_start", "artifact_chunk", "artifact_end"].includes(message?.type)) {
+    if (typeof message.request_id !== "string" || typeof message.artifact_id !== "string") return false;
+    try { rpc.send({ ...message, id: message.request_id, tab_id: sender?.tab?.id, url: sender?.url || "" }); } catch (_error) {}
+    return false;
+  }
   if (message?.type !== "chat_progress") return false;
   const tabId = sender?.tab?.id;
   if (!Number.isInteger(tabId) || !bridge.detectProvider(sender?.url || "") || typeof message.request_id !== "string" || !PROGRESS_PHASES.has(message.phase)) return false;
