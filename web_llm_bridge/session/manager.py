@@ -12,11 +12,17 @@ from ..providers.registry import ProviderRegistry
 from ..transport import ExtensionTransport
 from .store import SessionStore
 
+try:
+    from ..artifacts.store import ArtifactStore
+except ImportError:  # 允许在精简安装中使用会话管理
+    ArtifactStore = Any  # type: ignore[misc,assignment]
+
 class SessionManager:
-    def __init__(self, store: SessionStore | None = None, providers: ProviderRegistry | None = None, transport: ExtensionTransport | None = None) -> None:
+    def __init__(self, store: SessionStore | None = None, providers: ProviderRegistry | None = None, transport: ExtensionTransport | None = None, artifacts: Any | None = None) -> None:
         self.store = store or SessionStore()
         self.providers = providers or ProviderRegistry()
         self.transport = transport or ExtensionTransport()
+        self.artifacts = artifacts or ArtifactStore()
         self._transport_started = False
         self.lock = asyncio.Lock()
         self._active: dict[str, str] = {}
@@ -63,7 +69,29 @@ class SessionManager:
                 # 请求可能已经提交，绝不能自动重发，并保留原始错误。
                 raise
             saved = self.store.upsert(record, current_url=result.get("url", record["current_url"]), sequence=sequence, active=True)
-            return {**self._result(saved), "text": result["text"]}
+            response: dict[str, Any] = {**self._result(saved), "text": result["text"]}
+            raw_artifacts = result.get("artifacts")
+            if isinstance(raw_artifacts, list):
+                public_artifacts: list[dict[str, Any]] = []
+                for item in raw_artifacts:
+                    if not isinstance(item, dict):
+                        continue
+                    descriptor = {key: value for key, value in item.items() if not key.startswith("_")}
+                    source = item.get("_source")
+                    source_kind = item.get("_source_kind")
+                    if isinstance(source, str) and isinstance(source_kind, str):
+                        try:
+                            saved_descriptor = self.artifacts.upsert(
+                                session_id=saved["session_id"], provider=provider,
+                                conversation_url=saved["current_url"], descriptor=descriptor,
+                                source_kind=source_kind, source=source,
+                            )
+                            descriptor = saved_descriptor
+                        except (TypeError, ValueError):
+                            pass
+                    public_artifacts.append(descriptor)
+                response["artifacts"] = public_artifacts
+            return response
 
     async def get_messages(self, *, provider: str = "chatgpt", session_id: str | None = None, limit: int | None = DEFAULT_HISTORY_LIMIT, full: bool = False) -> dict[str, Any]:
         async with self.lock:
@@ -84,9 +112,46 @@ class SessionManager:
     async def list_sessions(self, provider: str | None = None) -> list[dict[str, Any]]:
         return [dict(item, active=self._active.get(item["provider"]) == item["session_id"]) for item in self.store.list(provider)]
 
+    async def close_session(self, *, provider: str = "chatgpt", session_id: str | None = None) -> dict[str, Any]:
+        """解除浏览器标签绑定，但保留会话元数据，重复关闭不报错。"""
+        async with self.lock:
+            record = self.store.get(session_id, provider) if session_id else self.store.get(self._active.get(provider, ""), provider)
+            if record is None:
+                raise WebLLMBridgeError("Session 不存在", "SESSION_NOT_FOUND")
+            try:
+                await self._request_browser("close_session", {"provider": provider, "tab_id": record["tab_id"]}, timeout_ms=30_000)
+            except WebLLMBridgeError as exc:
+                if exc.code != "TAB_CLOSED":
+                    raise
+            saved = self.store.upsert(record, active=False)
+            if self._active.get(provider) == record["session_id"]:
+                self._active.pop(provider, None)
+            return self._result(saved)
+
+    async def forget_session(self, *, provider: str = "chatgpt", session_id: str) -> dict[str, Any]:
+        async with self.lock:
+            record = self.store.get(session_id, provider)
+            if record is None:
+                raise WebLLMBridgeError("Session 不存在", "SESSION_NOT_FOUND")
+            self.store.delete(session_id)
+            if self._active.get(provider) == session_id:
+                self._active.pop(provider, None)
+            delete_artifacts = getattr(self.artifacts, "delete_session", None)
+            if delete_artifacts:
+                delete_artifacts(session_id)
+            return {"session_id": session_id, "provider": provider, "forgotten": True}
+
+    async def get_artifact(self, artifact_id: str) -> dict[str, Any]:
+        record = self.artifacts.get(artifact_id)
+        if record is None:
+            raise WebLLMBridgeError("Artifact 不存在", "ARTIFACT_NOT_FOUND")
+        descriptor = getattr(record, "descriptor", record)
+        return dict(descriptor)
+
     async def close(self) -> None:
-        await self.transport.close()
-        self._transport_started = False
+        async with self.lock:
+            await self.transport.close()
+            self._transport_started = False
 
     async def _ensure(self, provider: str, session_id: str | None) -> dict[str, Any]:
         record = self.store.get(session_id, provider) if session_id else self.store.get(self._active.get(provider, ""), provider)

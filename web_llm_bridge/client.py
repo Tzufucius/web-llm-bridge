@@ -31,6 +31,15 @@ class WebLLMClient:
             raise WebLLMBridgeError("Broker 返回无效会话列表", "INVALID_RESPONSE")
         return sessions
 
+    async def close_session(self, session_id: str, *, provider: str = "chatgpt") -> dict[str, Any]:
+        return await self.call("close_session", {"provider": provider, "session_id": session_id})
+
+    async def forget_session(self, session_id: str, *, provider: str = "chatgpt") -> dict[str, Any]:
+        return await self.call("forget_session", {"provider": provider, "session_id": session_id})
+
+    async def get_artifact(self, artifact_id: str) -> dict[str, Any]:
+        return await self.call("get_artifact", {"artifact_id": artifact_id})
+
 
 async def rpc_call(method: str, params: dict[str, Any], *, progress: Callable[[dict[str, Any]], None] | None = None, host: str = BRIDGE_HOST, port: int = BROKER_PORT) -> dict[str, Any]:
     request_id = str(uuid4())

@@ -31,6 +31,17 @@ class WebLLMSession:
         self._update(result)
         return result["messages"]
 
+    async def close(self) -> dict[str, Any]:
+        result = await rpc_call("close_session", {"provider": self.provider, "session_id": self.session_id})
+        self._update(result)
+        return result
+
+    async def forget(self) -> dict[str, Any]:
+        return await rpc_call("forget_session", {"provider": self.provider, "session_id": self.session_id})
+
+    async def get_artifact(self, artifact_id: str) -> dict[str, Any]:
+        return await rpc_call("get_artifact", {"artifact_id": artifact_id})
+
     async def __aenter__(self) -> "WebLLMSession":
         return self
 
