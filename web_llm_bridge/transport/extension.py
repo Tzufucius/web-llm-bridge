@@ -35,9 +35,26 @@ class ExtensionTransport:
         self._progress_events: dict[str, asyncio.Event] = {}
         self._closed = False
 
+    @property
+    def connected(self) -> bool:
+        """当前是否存在已完成 hello 握手的扩展连接。"""
+        return not self._closed and self._client is not None and self._ready.is_set()
+
+    async def wait_until_ready(self, timeout: float = 60.0) -> None:
+        """等待扩展完成握手；超时转换为稳定的 RPC 错误。"""
+        if self.connected:
+            return
+        try:
+            await asyncio.wait_for(self._ready.wait(), timeout=max(0.0, timeout))
+        except asyncio.TimeoutError as exc:
+            raise RPCError(error_message("EXTENSION_HANDSHAKE_TIMEOUT"), "EXTENSION_HANDSHAKE_TIMEOUT", safe_to_retry=True) from exc
+        if not self.connected:
+            raise RPCError(error_message("EXTENSION_NOT_CONNECTED"), "EXTENSION_NOT_CONNECTED", safe_to_retry=True)
+
     async def start(self) -> None:
         if self._server is not None:
             return
+        self._closed = False
         try:
             self._server = await serve(self._handle_connection, BRIDGE_HOST, EXTENSION_PORT, ping_interval=None, max_size=MAX_MESSAGE_BYTES, origins=[_ORIGIN])
         except OSError as exc:
@@ -62,9 +79,9 @@ class ExtensionTransport:
         if self._closed:
             raise RPCError("Bridge 已关闭", "EXTENSION_NOT_CONNECTED")
         try:
-            await asyncio.wait_for(self._ready.wait(), timeout=30)
-        except asyncio.TimeoutError as exc:
-            raise RPCError(error_message("EXTENSION_NOT_CONNECTED"), "EXTENSION_NOT_CONNECTED") from exc
+            await self.wait_until_ready(30)
+        except RPCError:
+            raise
         request_id = str(uuid4())
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future

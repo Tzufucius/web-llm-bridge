@@ -5,6 +5,11 @@ from __future__ import annotations
 from typing import Any, Final
 BRIDGE_HOST: Final = "127.0.0.1"
 EXTENSION_PORT: Final = 8765
+EXTENSION_GRACE_SECONDS: Final = 2.0
+EXTENSION_HANDSHAKE_TIMEOUT_SECONDS: Final = 60.0
+# 语义别名，供浏览器启动层和上层调用方使用。
+BROWSER_START_GRACE_SECONDS: Final = EXTENSION_GRACE_SECONDS
+BROWSER_HANDSHAKE_TIMEOUT_SECONDS: Final = EXTENSION_HANDSHAKE_TIMEOUT_SECONDS
 BROKER_PORT: Final = 8766
 MAX_MESSAGE_BYTES: Final = 8 * 1024 * 1024
 PROTOCOL_VERSION: Final = 1
@@ -13,6 +18,9 @@ MAX_HISTORY_LIMIT: Final = 1_000
 PROGRESS_PHASES: Final = {"submitted", "thinking", "working", "tool_call", "streaming"}
 ERROR_MESSAGES: Final = {
     "EXTENSION_NOT_CONNECTED": "尚未检测到浏览器扩展",
+    "BROWSER_START_FAILED": "浏览器启动失败",
+    "BROWSER_NOT_FOUND": "找不到可用的浏览器可执行文件",
+    "EXTENSION_HANDSHAKE_TIMEOUT": "等待浏览器扩展握手超时",
     "EXTENSION_ALREADY_CONNECTED": "已有浏览器扩展连接到 Bridge",
     "INVALID_ORIGIN": "WebSocket 连接来源不是允许的浏览器扩展",
     "INCOMPATIBLE_PROTOCOL": "浏览器扩展协议版本不兼容",
