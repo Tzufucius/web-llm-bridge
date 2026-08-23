@@ -39,9 +39,9 @@
     const srcset = candidateFromSrcset(image.getAttribute?.("srcset"));
     if (srcset) return { source: srcset, quality: "display" };
     const current = image.currentSrc || "";
-    if (current) return { source: current, quality: "display" };
+    if (current) return { source: current, quality: "unknown" };
     const src = image.getAttribute?.("src") || "";
-    if (src) return { source: src, quality: "display" };
+    if (src) return { source: src, quality: "unknown" };
     return { source: "", quality: "unknown" };
   }
   function isArtifactImage(image) {
@@ -58,6 +58,8 @@
   }
   function getArtifacts(messageNode) {
     if (!messageNode?.querySelectorAll) return [];
+    const role = messageNode.getAttribute?.("data-message-author-role");
+    if (role && role !== "assistant") return [];
     const result = []; let index = 0;
     for (const image of messageNode.querySelectorAll("img")) {
       const state = isArtifactImage(image); if (!state) continue;
