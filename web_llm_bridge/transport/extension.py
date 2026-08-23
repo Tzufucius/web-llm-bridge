@@ -207,7 +207,7 @@ class ExtensionTransport:
         try:
             message_type = message.get("type")
             if message_type == "artifact_start":
-                if transfer.get("expected") is not None or not isinstance(message.get("size"), int) or message["size"] < 0 or message["size"] > MAX_ARTIFACT_BYTES:
+                if transfer.get("expected") is not None or isinstance(message.get("size"), bool) or not isinstance(message.get("size"), int) or message["size"] < 0 or message["size"] > MAX_ARTIFACT_BYTES:
                     raise RPCError("Artifact 起始块无效", "ARTIFACT_TRANSFER_FAILED", safe_to_retry=True)
                 transfer["expected"] = message["size"]
                 transfer["mime_type"] = message.get("mime_type")
@@ -216,7 +216,7 @@ class ExtensionTransport:
                 raise RPCError("Artifact 结束块后仍收到数据", "ARTIFACT_TRANSFER_FAILED", safe_to_retry=True)
             if message_type == "artifact_chunk":
                 sequence = message.get("sequence")
-                if transfer.get("expected") is None or sequence != transfer.get("next_sequence") or not isinstance(message.get("data"), str):
+                if transfer.get("expected") is None or isinstance(sequence, bool) or not isinstance(sequence, int) or sequence != transfer.get("next_sequence") or not isinstance(message.get("data"), str):
                     raise RPCError("Artifact 分块顺序无效", "ARTIFACT_TRANSFER_FAILED", safe_to_retry=True)
                 chunk = base64.b64decode(message["data"], validate=True)
                 if len(transfer["data"]) + len(chunk) > MAX_ARTIFACT_BYTES:
