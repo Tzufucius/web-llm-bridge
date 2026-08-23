@@ -76,6 +76,12 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
             result = await ArtifactMaterializer().materialize(value, Path(directory) / "image.png")
             self.assertEqual(result["mime_type"], "image/png")
 
+    async def test_https_authenticated_source_falls_back_to_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch("web_llm_bridge.artifacts.downloader.urlopen", side_effect=OSError("403")):
+            value = record("https://chatgpt.com/backend-api/estuary/content?id=file", "https")
+            result = await ArtifactMaterializer(https_fetcher=lambda _: asyncio.sleep(0, result=(PNG, "image/png"))).materialize(value, Path(directory) / "image.png")
+            self.assertEqual(result["mime_type"], "image/png")
+
     async def test_invalid_magic_bytes_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             value = record("data:image/png;base64," + base64.b64encode(b"not-png").decode(), "data")

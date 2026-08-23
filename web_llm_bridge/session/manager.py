@@ -261,7 +261,7 @@ class SessionManager:
                     transfer_mime = result.get("_artifact_mime_type")
                     return bytes(data), transfer_mime if isinstance(transfer_mime, str) else None
 
-                materializer = ArtifactMaterializer(blob_fetcher=fetch_blob)
+                materializer = ArtifactMaterializer(blob_fetcher=fetch_blob, https_fetcher=fetch_blob)
                 try:
                     return await materializer.materialize(record, output)
                 except WebLLMBridgeError as exc:
