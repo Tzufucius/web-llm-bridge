@@ -27,7 +27,7 @@ let rpc;
 async function routeRequest(method, params, requestId) {
   if (method === "open") return tabs.attach(params);
   if (method === "close_tab") return tabs.close(params?.tab_id);
-  if (method === "get_messages" || method === "chat" || method === "resolve_artifact" || method === "get_artifact") {
+  if (method === "get_messages" || method === "chat" || method === "resolve_artifact" || method === "get_artifact" || method === "debug_snapshot" || method === "debug_trace" || method === "wait_artifact") {
     return tabs.request(method, { ...params, request_id: requestId });
   }
   throw bridge.error("INTERNAL_ERROR", `未知 RPC 方法：${method}`);

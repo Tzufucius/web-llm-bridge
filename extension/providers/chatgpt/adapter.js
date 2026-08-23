@@ -79,6 +79,57 @@
     }
     throw bridge.error("ARTIFACT_NOT_FOUND", "页面中未找到指定 Artifact", true);
   }
+  function debugArtifact(item) {
+    const source = typeof item?.source_identity === "string" ? item.source_identity : "";
+    return {
+      id: item?.id || "",
+      kind: item?.kind || "image",
+      index: Number.isInteger(item?.index) ? item.index : null,
+      quality: item?.quality || "unknown",
+      mime_type: item?.mime_type || null,
+      width: item?.width ?? null,
+      height: item?.height ?? null,
+      complete: item?.complete === true,
+      natural_width: Number(item?.naturalWidth || 0),
+      natural_height: Number(item?.naturalHeight || 0),
+      ready: item?.ready === true,
+      source_kind: item?._source_kind || sourceKind(source) || null,
+      source_available: Boolean(source),
+      source_hash: source ? stableHash(source) : null,
+    };
+  }
+  function debugSnapshot(revision) {
+    const prompt = findVisible(selectors.prompt);
+    const assistant = bridge.ChatGPTAdapter.getLastAssistant();
+    const text = bridge.normalizeText(assistant?.innerText || assistant?.textContent || "");
+    const artifacts = assistant ? getArtifacts(assistant) : [];
+    const origin = root.location?.origin || "";
+    const pathname = root.location?.pathname || "/";
+    return {
+      page: { origin, pathname },
+      prompt: {
+        present: Boolean(prompt),
+        visible: Boolean(prompt && visible(prompt)),
+        text_length: String(prompt?.value ?? prompt?.innerText ?? "").length,
+      },
+      counts: {
+        users: bridge.ChatGPTAdapter.getUsers().length,
+        assistants: document.querySelectorAll(selectors.assistant).length,
+        messages: bridge.ChatGPTAdapter.getMessages().length,
+      },
+      assistant: assistant ? {
+        present: true,
+        turn_id: turnId(assistant),
+        text_length: text.length,
+        text_hash: stableHash(text),
+        completion_marker: bridge.ChatGPTAdapter.hasCompletionMarker(assistant),
+      } : { present: false },
+      generating: bridge.ChatGPTAdapter.isGenerating(),
+      revision: Number.isInteger(revision) ? revision : 0,
+      artifacts: artifacts.map(debugArtifact),
+      artifact_signature: JSON.stringify(artifacts.map((item) => [item.id, item.index, item.width, item.height, item.complete, item.naturalWidth, item.naturalHeight, item.ready, item._source_kind || sourceKind(item.source_identity || "")])),
+    };
+  }
   bridge.ChatGPTAdapter = {
     selectors,
     serializer: bridge.ChatGPTSerializer,
@@ -94,6 +145,7 @@
     turnAttributes: ["data-turn-id", "data-testid", "data-turn"],
     getArtifacts,
     resolveArtifact,
+    debugSnapshot,
     hasCompletionMarker(node) { return [node, node?.parentElement].filter(Boolean).some((candidate) => selectors.completion.some((selector) => { try { return Boolean(candidate.matches?.(selector) || candidate.querySelector(selector)); } catch (_error) { return false; } })); },
     isActivityNode(node) { const all = activitySelectors(); return matches(node, all) || all.some((selector) => { try { return Boolean(node?.closest(selector)); } catch (_error) { return false; } }); },
     isActivitySubtree(node) { return this.isActivityNode(node) || [...activitySelectors()].some((selector) => { try { return Boolean(node?.querySelector(selector)); } catch (_error) { return false; } }); },

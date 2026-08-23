@@ -100,6 +100,88 @@ class SessionManager:
                 messages.append(current)
             return {**self._result(saved), "messages": messages, "truncated": result.get("truncated") is True}
 
+    async def debug_snapshot(self, *, provider: str = "chatgpt", session_id: str | None = None) -> dict[str, Any]:
+        async with self.lock:
+            record = await self._ensure(provider, session_id)
+            result = await self._request_browser("debug_snapshot", {"provider": provider, "tab_id": record["tab_id"]}, timeout_ms=30_000)
+            saved = self.store.upsert(record, tab_id=result.get("tab_id", record["tab_id"]), current_url=result.get("url", record["current_url"]), active=True)
+            return {**self._result(saved), "snapshot": result.get("snapshot", result)}
+
+    async def debug_trace(self, *, provider: str = "chatgpt", session_id: str | None = None, request_id: str) -> dict[str, Any]:
+        if not isinstance(request_id, str) or not request_id:
+            raise WebLLMBridgeError("request_id 参数必须是非空字符串", "INVALID_ARGUMENT")
+        async with self.lock:
+            record = await self._ensure(provider, session_id)
+            result = await self._request_browser("debug_trace", {"provider": provider, "tab_id": record["tab_id"], "request_id": request_id}, timeout_ms=30_000)
+            saved = self.store.upsert(record, tab_id=result.get("tab_id", record["tab_id"]), current_url=result.get("url", record["current_url"]), active=True)
+            return {**self._result(saved), "trace": result.get("trace", result)}
+
+    async def wait_artifact(self, artifact_id: str, *, timeout_ms: int = 60_000) -> dict[str, Any]:
+        if not isinstance(artifact_id, str) or not artifact_id:
+            raise WebLLMBridgeError("artifact_id 参数必须是非空字符串", "INVALID_ARGUMENT")
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 1_000 <= timeout_ms <= 300_000:
+            raise WebLLMBridgeError("timeout_ms 必须是 1000 到 300000 的整数", "INVALID_ARGUMENT")
+        async with self.lock:
+            record = self.artifacts.get(artifact_id)
+            if record is None:
+                raise WebLLMBridgeError("Artifact 不存在", "ARTIFACT_NOT_FOUND")
+            browser_record = self.store.get(record.session_id, record.provider)
+            if browser_record is None:
+                raise WebLLMBridgeError("Artifact 所属 Session 不存在", "ARTIFACT_NOT_FOUND")
+            working_tab: int | None = browser_record["tab_id"] if browser_record.get("active") else None
+            temporary_tab: int | None = None
+
+            async def ensure_tab() -> int:
+                nonlocal working_tab, temporary_tab
+                if working_tab is not None:
+                    return working_tab
+                rebound = await self._open_browser(self.providers.get_provider(record.provider), browser_record["current_url"], tab_id=browser_record.get("tab_id"))
+                working_tab = rebound["tab_id"]
+                if browser_record.get("active"):
+                    self.store.upsert(browser_record, tab_id=working_tab, current_url=rebound.get("url", browser_record["current_url"]), active=True)
+                else:
+                    temporary_tab = working_tab
+                return working_tab
+
+            try:
+                tab_id = await ensure_tab()
+                result = await self._request_browser(
+                    "wait_artifact",
+                    {
+                        "provider": record.provider,
+                        "tab_id": tab_id,
+                        "artifact_id": record.id,
+                        "turn_id": record.turn_id,
+                        "index": record.index,
+                        "timeout_ms": timeout_ms,
+                    },
+                    timeout_ms=timeout_ms + 5_000,
+                )
+                if result.get("ready") is not True:
+                    raise WebLLMBridgeError("Artifact 尚未就绪", "ARTIFACT_NOT_READY")
+                source = result.get("_source") if isinstance(result.get("_source"), str) else record.source
+                source_kind = result.get("_source_kind") if isinstance(result.get("_source_kind"), str) else record.source_kind
+                descriptor = {key: value for key, value in result.items() if not key.startswith("_") and key not in {"ready", "complete", "naturalWidth", "naturalHeight", "source_identity", "url", "provider"}}
+                descriptor.setdefault("id", record.id)
+                descriptor.setdefault("kind", record.kind)
+                descriptor.setdefault("turn_id", record.turn_id)
+                descriptor.setdefault("index", record.index)
+                updated = self.artifacts.upsert(
+                    session_id=record.session_id,
+                    provider=record.provider,
+                    conversation_url=record.conversation_url,
+                    descriptor=descriptor,
+                    source_kind=source_kind,
+                    source=source,
+                )
+                return {**updated, "ready": True, "complete": result.get("complete", True), "width": result.get("width") or updated.get("width"), "height": result.get("height") or updated.get("height")}
+            finally:
+                if temporary_tab is not None:
+                    try:
+                        await self._request_browser("close_tab", {"tab_id": temporary_tab}, timeout_ms=30_000)
+                    except WebLLMBridgeError:
+                        pass
+
     async def list_sessions(self, provider: str | None = None) -> list[dict[str, Any]]:
         return [dict(item, active=self._active.get(item["provider"]) == item["session_id"]) for item in self.store.list(provider)]
 
