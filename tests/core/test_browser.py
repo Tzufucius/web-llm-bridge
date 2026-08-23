@@ -15,11 +15,11 @@ class BrowserLauncherTests(unittest.TestCase):
         launcher.launch("https://example.test")
         self.assertEqual(popen.call_args.args[0], ["browser.exe", "https://example.test"])
 
-    def test_missing_executable_is_structured(self):
-        with patch("web_llm_bridge.browser.launcher._default_executable", return_value=None):
+    def test_default_browser_failure_is_structured(self):
+        with patch("web_llm_bridge.browser.launcher.webbrowser.open", return_value=False):
             with self.assertRaises(BrowserLaunchError) as caught:
                 BrowserLauncher().launch()
-        self.assertEqual(caught.exception.code, "BROWSER_NOT_FOUND")
+        self.assertEqual(caught.exception.code, "BROWSER_LAUNCH_FAILED")
 
 
 class BrowserBootstrapTests(unittest.IsolatedAsyncioTestCase):
@@ -33,6 +33,29 @@ class BrowserBootstrapTests(unittest.IsolatedAsyncioTestCase):
         transport.start.assert_awaited_once()
         launcher.launch.assert_called_once_with("https://example.test")
         transport.wait_until_ready.assert_awaited_once_with(1)
+
+    async def test_concurrent_starts_launch_once(self):
+        class FakeTransport:
+            def __init__(self):
+                self.connected = False
+                self.ready = asyncio.Event()
+
+            async def start(self):
+                return None
+
+            async def wait_until_ready(self, _timeout):
+                await self.ready.wait()
+
+        transport = FakeTransport()
+        launcher = MagicMock()
+        def launch(_url):
+            transport.connected = True
+            transport.ready.set()
+        launcher.launch.side_effect = launch
+        bootstrap = BrowserBootstrap(transport, launcher)
+        with patch("web_llm_bridge.browser.launcher.BROWSER_GRACE_SECONDS", 0):
+            await asyncio.gather(*(bootstrap.start("about:blank", handshake_timeout=1) for _ in range(5)))
+        launcher.launch.assert_called_once_with("about:blank")
 
 
 class ExtensionReadinessTests(unittest.IsolatedAsyncioTestCase):
