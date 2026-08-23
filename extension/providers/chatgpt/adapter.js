@@ -119,10 +119,12 @@
     if (!messageNode?.querySelectorAll) return [];
     const role = messageNode.getAttribute?.("data-message-author-role");
     if (role && role !== "assistant") return [];
-    const result = []; let index = 0;
+    const result = []; const seenSources = new Set(); let index = 0;
     for (const image of imageNodesFor(messageNode)) {
       const state = isArtifactImage(image); if (!state) continue;
       const source = imageSource(image);
+      if (source.source && seenSources.has(source.source)) continue;
+      if (source.source) seenSources.add(source.source);
       const id = `img_${stableHash(`${profile.id}:${root.location?.pathname || ""}:${turnId(messageNode)}:${index}`)}_${index}`;
       result.push({ id, kind: "image", provider: profile.id, turn_id: turnId(messageNode), index, mime_type: attr(image, ["data-mime-type", "type"]) || null, width: state.naturalWidth || null, height: state.naturalHeight || null, alt: image.getAttribute?.("alt") || "", quality: source.quality, ready: state.ready, complete: state.complete, naturalWidth: state.naturalWidth, naturalHeight: state.naturalHeight, source_identity: source.source, _source: source.source, _source_kind: sourceKind(source.source) });
       index += 1;
