@@ -11,6 +11,6 @@ const call = (message) => new Promise((resolve) => listeners[0](message, {}, res
   context.scrollY = 900;
   const full = await call({ method: "get_messages", full: true }); assert.equal(full.ok, true); assert.equal(full.result.messages.length, 4); assert.equal(context.scrollY, 900);
   const deduped = await call({ method: "get_messages", full: true }); assert.equal(deduped.result.messages.length, 4);
-  stage = 2; context.location.pathname = "/c/next"; const reset = await call({ method: "get_messages" }); assert.deepEqual(JSON.parse(JSON.stringify(reset.result.messages)), [{ role: "user", content: "新会话" }]);
+  stage = 2; context.location.pathname = "/c/next"; const reset = await call({ method: "get_messages" }); assert.deepEqual(JSON.parse(JSON.stringify(reset.result.messages)), [{ role: "user", content: "新会话", artifacts: [] }]);
   stage = 1; context.location.pathname = "/c/truncated"; context.scrollY = 100000; const short = await call({ method: "get_messages", full: true }); assert.equal(short.result.truncated, true);
 })().catch((error) => { console.error(error); process.exitCode = 1; });

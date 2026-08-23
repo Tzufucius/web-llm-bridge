@@ -33,6 +33,10 @@ the full history for every prompt.
 Do not call `open --new` before every prompt. That discards useful persistent
 context.
 
+The runtime automatically waits for the Extension and rebinds a stale Tab by
+Conversation URL before dispatching a new prompt. You normally do not need to
+start Chrome/Edge, the Broker, or a ChatGPT Tab manually.
+
 ## Create a New Session
 
 Create a new Session only when the user requests a fresh Conversation, the
@@ -56,3 +60,12 @@ web-llm-agent get-messages --limit 5 --json
 Use `--session-id` when the target is explicit. Use `--all` only when the user
 or task explicitly requires complete history; do not use full history to
 rebuild context automatically.
+
+When work is temporarily complete but the Conversation may continue, release
+the browser resource without deleting the Session:
+
+```bash
+web-llm-agent close-session --session-id SESSION_ID --json
+```
+
+Use `forget-session` only when the local Session should no longer be tracked.

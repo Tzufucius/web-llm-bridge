@@ -56,3 +56,15 @@ Local Agent selects a bounded question
 ```
 
 Do not modify code merely because the Web LLM suggested it.
+
+For image replies, treat `result.artifacts` as descriptors only. Materialize a
+specific image with:
+
+```bash
+web-llm-agent get-artifact --id ARTIFACT_ID --json
+```
+
+The Bridge handles HTTPS, `data:`, and `blob:` sources. The Agent must not
+inspect provider DOM or pass arbitrary URLs. After `close-session`, a required
+Artifact may be temporarily resolved and the bound Tab is closed again; after
+`forget-session`, only already materialized files remain guaranteed.

@@ -7,6 +7,78 @@
   function findVisible(list) { for (const selector of list) { const element = document.querySelector(selector); if (visible(element)) return element; } return null; }
   function matches(node, list) { return Boolean(node && node.nodeType === Node.ELEMENT_NODE && list.some((selector) => { try { return node.matches(selector); } catch (_error) { return false; } })); }
   function activitySelectors() { return ["main", '[role="main"]', selectors.message, ...selectors.tool, ...selectors.status]; }
+  function stableHash(value) {
+    let hash = 2166136261;
+    for (const char of String(value)) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+  function turnId(node) {
+    const container = bridge.ChatGPTAdapter.findTurnContainer(node);
+    for (const attribute of bridge.ChatGPTAdapter.turnAttributes) { const value = container?.getAttribute?.(attribute); if (value) return value; }
+    return `node-${stableHash(container?.innerText || "")}`;
+  }
+  function sourceKind(source) { try { return new URL(source, root.location?.href || undefined).protocol.replace(":", ""); } catch (_error) { return ""; } }
+  function absoluteSource(source) { try { return new URL(source, root.location?.href || undefined).href; } catch (_error) { return source; } }
+  function candidateFromSrcset(value) {
+    if (typeof value !== "string") return null;
+    const candidates = value.split(",").map((item) => {
+      const parts = item.trim().split(/\s+/); const descriptor = parts[1] || "";
+      const numeric = Number.parseFloat(descriptor); const density = descriptor.endsWith("x");
+      return { source: parts[0], density, score: Number.isFinite(numeric) ? numeric : 0 };
+    }).filter((item) => item.source);
+    const preferred = candidates.some((item) => item.density) ? candidates.filter((item) => item.density) : candidates;
+    preferred.sort((left, right) => right.score - left.score);
+    return preferred[0]?.source || null;
+  }
+  function attr(element, names) { for (const name of names) { const value = element?.getAttribute?.(name); if (value) return value; } return ""; }
+  function imageSource(image) {
+    const original = attr(image, ["data-original", "data-original-src", "data-full-size", "data-download-url"]);
+    if (original) return { source: absoluteSource(original), quality: "original" };
+    const anchor = image.closest?.("a");
+    const href = anchor?.getAttribute?.("href") || "";
+    if (href && /^(https?:|data:|blob:|\/)/i.test(href)) return { source: absoluteSource(href), quality: "original" };
+    const srcset = candidateFromSrcset(image.getAttribute?.("srcset"));
+    if (srcset) return { source: absoluteSource(srcset), quality: "display" };
+    const current = image.currentSrc || "";
+    if (current) return { source: absoluteSource(current), quality: "unknown" };
+    const src = image.getAttribute?.("src") || "";
+    if (src) return { source: absoluteSource(src), quality: "unknown" };
+    return { source: "", quality: "unknown" };
+  }
+  function isArtifactImage(image) {
+    if (!image || image.tagName?.toLowerCase() !== "img") return false;
+    const values = [image.getAttribute?.("alt"), image.getAttribute?.("aria-label"), image.getAttribute?.("class"), image.getAttribute?.("data-testid"), image.closest?.("[aria-hidden='true']") && "hidden"].filter(Boolean).join(" ").toLowerCase();
+    if (/(avatar|favicon|icon|toolbar|logo|loading|placeholder|spinner|thumbnail|工具|头像|图标)/i.test(values)) return false;
+    const source = imageSource(image).source;
+    if (!source || !/^(https?:|data:|blob:)/i.test(source)) return false;
+    if (/(avatar|favicon|icon|loading|placeholder|spinner|thumbnail)/i.test(source)) return false;
+    const complete = image.complete !== false;
+    const naturalWidth = Number(image.naturalWidth || image.width || 0);
+    const naturalHeight = Number(image.naturalHeight || image.height || 0);
+    return { source, complete, ready: complete && naturalWidth > 0 && naturalHeight > 0, naturalWidth, naturalHeight };
+  }
+  function getArtifacts(messageNode) {
+    if (!messageNode?.querySelectorAll) return [];
+    const role = messageNode.getAttribute?.("data-message-author-role");
+    if (role && role !== "assistant") return [];
+    const result = []; let index = 0;
+    for (const image of messageNode.querySelectorAll("img")) {
+      const state = isArtifactImage(image); if (!state) continue;
+      const source = imageSource(image);
+      const id = `img_${stableHash(`${profile.id}:${root.location?.pathname || ""}:${turnId(messageNode)}:${index}`)}_${index}`;
+      result.push({ id, kind: "image", provider: profile.id, turn_id: turnId(messageNode), index, mime_type: attr(image, ["data-mime-type", "type"]) || null, width: state.naturalWidth || null, height: state.naturalHeight || null, alt: image.getAttribute?.("alt") || "", quality: source.quality, ready: state.ready, complete: state.complete, naturalWidth: state.naturalWidth, naturalHeight: state.naturalHeight, source_identity: source.source, _source: source.source, _source_kind: sourceKind(source.source) });
+      index += 1;
+    }
+    return result;
+  }
+  function resolveArtifact(ref) {
+    const artifactId = String(ref?.artifact_id || ""); const turn = String(ref?.turn_id || ""); const index = Number(ref?.index);
+    for (const node of document.querySelectorAll(selectors.assistant)) {
+      if (turnId(node) !== turn) continue;
+      const artifacts = getArtifacts(node); if (artifacts[index] && (!artifactId || artifacts[index].id === artifactId)) return artifacts[index];
+    }
+    throw bridge.error("ARTIFACT_NOT_FOUND", "页面中未找到指定 Artifact", true);
+  }
   bridge.ChatGPTAdapter = {
     selectors,
     serializer: bridge.ChatGPTSerializer,
@@ -20,6 +92,8 @@
     getRole: (node) => node.getAttribute("data-message-author-role"),
     findTurnContainer: (node) => node.closest("[data-turn-id]") || node.closest('[data-testid^="conversation-turn-"]') || node.closest("[data-turn]") || node,
     turnAttributes: ["data-turn-id", "data-testid", "data-turn"],
+    getArtifacts,
+    resolveArtifact,
     hasCompletionMarker(node) { return [node, node?.parentElement].filter(Boolean).some((candidate) => selectors.completion.some((selector) => { try { return Boolean(candidate.matches?.(selector) || candidate.querySelector(selector)); } catch (_error) { return false; } })); },
     isActivityNode(node) { const all = activitySelectors(); return matches(node, all) || all.some((selector) => { try { return Boolean(node?.closest(selector)); } catch (_error) { return false; } }); },
     isActivitySubtree(node) { return this.isActivityNode(node) || [...activitySelectors()].some((selector) => { try { return Boolean(node?.querySelector(selector)); } catch (_error) { return false; } }); },

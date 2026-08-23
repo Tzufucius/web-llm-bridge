@@ -7,8 +7,9 @@ Web LLM Bridge 包含两段本地协议：
 - CLI/Agent 到 Broker：`127.0.0.1:8766` 上的 NDJSON over TCP；
 - Extension 到 Broker：`ws://127.0.0.1:8765` 上的 WebSocket JSON 消息。
 
-两者都是仅限回环地址的 IPC，不是公开远程 API。当前 Extension 协议版本为 `1`，两段
-Transport 的消息大小上限都是 8 MiB。
+两者都是仅限回环地址的 IPC，不是公开远程 API。当前 Extension 协议版本为 `2`，两段
+Transport 的消息大小上限都是 8 MiB。版本 2 增加 Session 生命周期 RPC 和有界 Artifact
+分块传输；旧版 Extension 会在握手阶段被拒绝。
 
 ## Broker NDJSON
 
@@ -121,7 +122,24 @@ Session 时，Manager 会在 Provider 默认 URL 创建 Session。结果是上�
 `updated_at`、`sequence`、`active` 和 `reopen_on_closed`。该方法返回 Store 记录，
 因此 URL 字段是 `current_url`，不是 `conversation_url`。
 
-协议版本 1 没有公共 `close` 方法。
+#### `close_session`
+
+要求 `session_id`。Broker 只关闭该 Session 当前绑定的标签页；已关闭标签页视为幂等
+成功，保留 Conversation URL 和 sequence，并将本地记录标记为 inactive。
+
+#### `forget_session`
+
+要求 `session_id`。Broker 关闭绑定标签页并删除本地 Session 元数据，不删除或归档
+Provider 云端 Conversation。
+
+#### `get_artifact`
+
+要求 Artifact `artifact_id`，可选输出路径。调用方不能提供任意 URL。返回绝对本地路径、
+MIME、字节大小、SHA-256 和 quality。
+
+Chat 与历史响应可以增加 `artifacts` 数组。图片 descriptor 包含 `id`、`kind`、
+`provider`、`turn_id`、`index`、`mime_type`、`width`、`height`、`alt`、`quality`；公共
+结果不会暴露 source URL 或 DOM selector。纯图片回复允许 `text: ""`。
 
 ## Broker progress
 
@@ -164,10 +182,10 @@ Broker 只接受一个活动 Client，且其 Origin 必须匹配 Chrome Extensio
 Extension 首先发送：
 
 ```json
-{"type":"hello","protocol_version":1}
+{"type":"hello","protocol_version":2}
 ```
 
-Broker 响应 `{"type":"hello_ack","protocol_version":1}`。不兼容的 hello 会收到
+Broker 响应 `{"type":"hello_ack","protocol_version":2}`。不兼容的 hello 会收到
 `INCOMPATIBLE_PROTOCOL` 错误；第二个活动 Extension 会收到
 `EXTENSION_ALREADY_CONNECTED`。Extension 还会发送 `ping`，Broker 以 `pong` 响应。
 
@@ -179,7 +197,8 @@ Broker 发送：
 {"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"你好"}}
 ```
 
-支持的内部方法为 `open`、`chat` 和 `get_messages`。响应为以下两种之一：
+支持的内部方法为 `open`、`chat`、`get_messages`、`close_tab`、`resolve_artifact` 和
+`get_artifact`。响应为以下两种之一：
 
 ```json
 {"type":"response","id":"transport-id","ok":true,"result":{}}
@@ -188,6 +207,10 @@ Broker 发送：
 ```json
 {"type":"response","id":"transport-id","ok":false,"error":{"code":"PAGE_NOT_READY","message":"...","safe_to_retry":false}}
 ```
+
+对于 Blob Artifact，Extension 发送与请求 ID 关联的 `artifact_start`、按序的
+`artifact_chunk`（每块 256 KiB 原始字节并使用 base64 编码）和 `artifact_end`。Broker
+会拒绝重复或缺失序号、无效 base64、大小不一致以及超过 50 MiB 限制的传输，然后才写入文件。
 
 Progress 使用相同 Transport ID，并包含 `tab_id`、`url`、`provider`、`phase`、
 `elapsed_ms` 和 `idle_ms`。该 WebSocket 契约属于内部接口；Provider 变化时可以连同
@@ -213,10 +236,11 @@ Prompt。
 | --- | --- |
 | Envelope 与参数 | `INVALID_JSON`、`INVALID_REQUEST`、`INVALID_ARGUMENT`、`UNKNOWN_METHOD` |
 | Provider/Session 选择 | `PROVIDER_NOT_FOUND`、`SESSION_NOT_FOUND`、`INVALID_URL` |
-| Extension 可用性 | `EXTENSION_NOT_CONNECTED`、`TAB_CLOSED`、`CONTENT_SCRIPT_UNAVAILABLE` |
+| Extension 可用性 | `EXTENSION_NOT_CONNECTED`、`BROWSER_LAUNCH_FAILED`、`BROWSER_EXTENSION_NOT_CONNECTED`、`TAB_CLOSED`、`CONTENT_SCRIPT_UNAVAILABLE` |
 | 页面操作 | `PAGE_NOT_READY`、`INPUT_FAILED`、`BUSY`、`SEND_FAILED` |
 | Chat 歧义 | `CHAT_STATE_UNKNOWN` |
-| 时间与大小 | `RPC_TIMEOUT`、`RESPONSE_TIMEOUT`、`RESPONSE_TOO_LARGE` |
+| 时间与大小 | `RPC_TIMEOUT`、`RESPONSE_TIMEOUT`、`RESPONSE_TOO_LARGE`、`ARTIFACT_TOO_LARGE` |
+| Artifact | `ARTIFACT_NOT_FOUND`、`ARTIFACT_UNAVAILABLE`、`ARTIFACT_TRANSFER_FAILED`、`ARTIFACT_INVALID_TYPE`、`ARTIFACT_SOURCE_EXPIRED`、`ARTIFACT_WRITE_FAILED` |
 | 兜底 | `INTERNAL_ERROR` |
 
 `PROMPT_NOT_FOUND` 和 `SEND_BUTTON_NOT_FOUND` 是 content runtime 内部诊断。目前会重试

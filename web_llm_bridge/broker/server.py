@@ -39,6 +39,20 @@ class BrokerServer:
                 result = await self.manager.chat(params.get("text"), provider=provider, session_id=session_id, progress=progress_sink)
             elif method == "get_messages":
                 result = await self.manager.get_messages(provider=provider, session_id=session_id, limit=params.get("limit", DEFAULT_HISTORY_LIMIT), full=params.get("full", False))
+            elif method == "close_session":
+                result = await self.manager.close_session(provider=provider, session_id=session_id)
+            elif method == "forget_session":
+                if not isinstance(session_id, str) or not session_id:
+                    raise WebLLMBridgeError("session_id 参数为必填字符串", "INVALID_ARGUMENT")
+                result = await self.manager.forget_session(provider=provider, session_id=session_id)
+            elif method == "get_artifact":
+                artifact_id = params.get("artifact_id")
+                if not isinstance(artifact_id, str) or not artifact_id:
+                    raise WebLLMBridgeError("artifact_id 参数为必填字符串", "INVALID_ARGUMENT")
+                output = params.get("output")
+                if output is not None and not isinstance(output, str):
+                    raise WebLLMBridgeError("output 参数必须是字符串", "INVALID_ARGUMENT")
+                result = await self.manager.get_artifact(artifact_id, output=output)
             elif method == "list_sessions":
                 listed_provider = params.get("provider")
                 if listed_provider is not None and not isinstance(listed_provider, str):

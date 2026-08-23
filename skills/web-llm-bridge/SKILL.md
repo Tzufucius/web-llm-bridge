@@ -51,7 +51,10 @@ Web LLM Bridge CLI is not installed or not available in the current environment.
 
 Do not automatically install packages, clone repositories, or replace the
 bridge with Playwright, Selenium, CDP, private APIs, cookies, or tokens. The
-normal Agent launcher starts or reuses the local Broker automatically.
+normal Agent launcher starts or reuses the local Broker automatically. When a
+browser operation is needed, the Broker also starts or wakes the configured
+daily browser, waits for the Extension handshake, and restores the selected
+Session tab. Authentication remains the user's responsibility.
 
 ## Tool Boundary
 
@@ -121,6 +124,16 @@ web-llm-agent get-messages --limit 5 --json
 
 Determine whether the Prompt or response already exists, then decide the next
 action. Never turn an uncertain submission into an unbounded retry loop.
+
+When a successful `chat` or `get-messages` result contains `artifacts`, use
+`get-artifact --id ARTIFACT_ID` to materialize the requested image. Do not parse
+ChatGPT DOM, copy data URIs, fetch `blob:` URLs directly, or invoke arbitrary
+download URLs.
+
+To release a browser tab while keeping the Conversation recoverable, use
+`close-session`. Use `forget-session` only when the local Bridge should stop
+maintaining that Session. Never close all ChatGPT tabs or call `chrome.tabs`
+directly.
 
 For detailed operational guidance, load only the reference needed:
 

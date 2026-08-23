@@ -24,3 +24,7 @@ ChatGPT DOM、ARIA 文案和虚拟化列表可能随站点发布改变。隐藏�
 Cookie、Token 或私有 API。
 
 Last tested：2026-08-22，Chrome/Edge Manifest V3 合成 DOM smoke；真实登录态 E2E 待本轮用户协同验证。
+
+Assistant 图片会作为 Artifact descriptor 提取。Adapter 过滤头像、图标、placeholder
+和用户上传图片，按 turn/index 保持稳定身份，并将私有 source 仅用于后续
+`get-artifact` 获取，不会进入普通 Agent 输出。
