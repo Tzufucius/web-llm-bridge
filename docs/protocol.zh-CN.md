@@ -89,6 +89,9 @@ Session 时，Manager 会在 Provider 默认 URL 创建 Session。结果是上�
 浏览器分派前 `sequence` 就会递增，即使操作随后失败也不回退。调用方不能把它作为提交
 成功的证据。
 
+成功的 Chat 结果还会包含 Extension request ID（`request_id`）。该 ID 只用于随后调用
+`debug_trace`，不代表 Prompt 已成功提交。
+
 #### `get_messages`
 
 参数为 `provider`、可选 `session_id`、`full` 和 `limit`：
@@ -140,6 +143,28 @@ MIME、字节大小、SHA-256 和 quality。
 Chat 与历史响应可以增加 `artifacts` 数组。图片 descriptor 包含 `id`、`kind`、
 `provider`、`turn_id`、`index`、`mime_type`、`width`、`height`、`alt`、`quality`；公共
 结果不会暴露 source URL 或 DOM selector。纯图片回复允许 `text: ""`。
+
+#### `debug_snapshot`
+
+读取绑定标签页的脱敏 DOM/Artifact 快照。该方法只返回页面 origin/path、Prompt 是否存在
+和文本长度、消息计数、最后 Assistant 的 turn/text hash、generating 状态、完成标记、
+revision 以及 Artifact 的就绪状态、尺寸、source 类型和 hash。不会返回完整 HTML、Prompt
+内容、Cookie、Token、signed URL、data URI 或 blob 内容。该方法需要浏览器 Extension
+连接，并可能触发同一套 Browser Bootstrap 和 Session rebind。
+快照还会列出最近保留的 Trace ID，便于 Chat 客户端在最终响应丢失时继续定位同一次请求。
+
+#### `debug_trace`
+
+参数为 `provider`、可选 `session_id` 和必填 `request_id`。返回该 Chat 请求在 Extension
+内存 ring buffer 中保留的事件：`before_send`、`submitted`、`assistant_node_seen`、
+`artifact_seen`、`artifact_ready`、`completion_candidate`、`completed` 或
+`chat_state_unknown`。Trace 不落盘，Extension 重载后会清空。
+
+#### `wait_artifact`
+
+参数为必填 `artifact_id` 和可选 `timeout_ms`（1000 到 300000，默认 60000）。它只等待
+已有 Artifact descriptor 变为 ready，不会重新提交 Prompt。关闭 Session 时会临时恢复标签页，
+完成后再次关闭，并保持 Session 的 `active=false`。超时返回 `ARTIFACT_NOT_READY`。
 
 ## Broker progress
 
@@ -197,8 +222,8 @@ Broker 发送：
 {"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"你好"}}
 ```
 
-支持的内部方法为 `open`、`chat`、`get_messages`、`close_tab`、`resolve_artifact` 和
-`get_artifact`。响应为以下两种之一：
+支持的内部方法为 `open`、`chat`、`get_messages`、`debug_snapshot`、`debug_trace`、
+`wait_artifact`、`close_tab`、`resolve_artifact` 和 `get_artifact`。响应为以下两种之一：
 
 ```json
 {"type":"response","id":"transport-id","ok":true,"result":{}}
@@ -240,7 +265,8 @@ Prompt。
 | 页面操作 | `PAGE_NOT_READY`、`INPUT_FAILED`、`BUSY`、`SEND_FAILED` |
 | Chat 歧义 | `CHAT_STATE_UNKNOWN` |
 | 时间与大小 | `RPC_TIMEOUT`、`RESPONSE_TIMEOUT`、`RESPONSE_TOO_LARGE`、`ARTIFACT_TOO_LARGE` |
-| Artifact | `ARTIFACT_NOT_FOUND`、`ARTIFACT_UNAVAILABLE`、`ARTIFACT_TRANSFER_FAILED`、`ARTIFACT_INVALID_TYPE`、`ARTIFACT_SOURCE_EXPIRED`、`ARTIFACT_WRITE_FAILED` |
+| Artifact | `ARTIFACT_NOT_FOUND`、`ARTIFACT_NOT_READY`、`ARTIFACT_UNAVAILABLE`、`ARTIFACT_TRANSFER_FAILED`、`ARTIFACT_INVALID_TYPE`、`ARTIFACT_SOURCE_EXPIRED`、`ARTIFACT_WRITE_FAILED` |
+| 调试 | `DEBUG_TRACE_NOT_FOUND` |
 | 兜底 | `INTERNAL_ERROR` |
 
 `PROMPT_NOT_FOUND` 和 `SEND_BUTTON_NOT_FOUND` 是 content runtime 内部诊断。目前会重试

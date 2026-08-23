@@ -4,7 +4,23 @@
   bridge.createHistory = function createHistory(provider, timing) {
     const cache = new Map(); const fallbackIds = new WeakMap(); let sequence = 0; let order = []; let pending = null; let active = false; let location = null;
     function reset() { const current = `${root.location?.origin || ""}${root.location?.pathname || ""}`; if (location !== null && location !== current) { cache.clear(); order = []; } location = current; }
-    function idFor(node, occurrences) { const container = provider.adapter.findTurnContainer(node); for (const attribute of provider.adapter.turnAttributes) { const value = container.getAttribute(attribute); if (value) return `${attribute}:${value}`; } if (!fallbackIds.has(container)) fallbackIds.set(container, `node:${++sequence}`); return fallbackIds.get(container); }
+    function idFor(node, occurrences) {
+      const container = provider.adapter.findTurnContainer(node);
+      let base = "";
+      for (const attribute of provider.adapter.turnAttributes) {
+        const value = container.getAttribute(attribute);
+        if (value) { base = `${attribute}:${value}`; break; }
+      }
+      if (!base) {
+        if (!fallbackIds.has(container)) fallbackIds.set(container, `node:${++sequence}`);
+        base = fallbackIds.get(container);
+      }
+      // ChatGPT occasionally renders more than one role node inside one turn
+      // container. Never let a duplicate identity overwrite another message.
+      const occurrence = (occurrences.get(base) || 0) + 1;
+      occurrences.set(base, occurrence);
+      return occurrence === 1 ? base : `${base}#${occurrence}`;
+    }
     function capture({ prepend = false } = {}) { reset(); const records = []; const occurrences = new Map(); for (const node of provider.adapter.getMessages()) { const role = provider.adapter.getRole(node); if (role !== "user" && role !== "assistant") continue; const content = bridge.serializeMessageToMarkdown(node, provider.adapter.serializer); const artifacts = role === "assistant" && provider.adapter.getArtifacts ? provider.adapter.getArtifacts(node) : []; if (content || artifacts.length) records.push({ id: idFor(node, occurrences), role, content, artifacts, artifactSignature: JSON.stringify(artifacts.map((item) => [item.id, item.source_identity, item.width, item.height, item.complete, item.naturalWidth, item.naturalHeight, item.ready])) }); }
       const added = []; for (const record of records) { const old = cache.get(record.id); if (!old) { cache.set(record.id, record); added.push(record.id); } else if (record.content !== old.content || record.artifactSignature !== old.artifactSignature) { cache.set(record.id, record); added.push(record.id); } } const unique = added.filter((id) => !order.includes(id)); order = prepend ? [...unique, ...order] : [...order, ...unique]; return { newCount: added.length, total: order.length }; }
     function messages() { return order.map((id) => cache.get(id)).filter(Boolean).map(({ role, content, artifacts }) => ({ role, content, artifacts: artifacts || [] })); }

@@ -96,6 +96,10 @@ non-empty string `text` containing the final serialized assistant response.
 `sequence` is incremented before browser dispatch, even if the operation later
 fails. Callers must not use it as submission proof.
 
+A successful chat result also contains the Extension request ID (`request_id`).
+It is intended for a subsequent `debug_trace` call and is not proof that the
+Prompt was submitted.
+
 #### `get_messages`
 
 Parameters are `provider`, optional `session_id`, `full`, and `limit`:
@@ -154,6 +158,35 @@ Chat and history responses may contain an additive `artifacts` array. An image
 descriptor contains `id`, `kind`, `provider`, `turn_id`, `index`, `mime_type`,
 `width`, `height`, `alt`, and `quality`; source URLs and DOM selectors are
 never part of the public result. A pure image reply may have `text: ""`.
+
+#### `debug_snapshot`
+
+Returns a sanitized DOM/Artifact snapshot for the bound tab. The result contains
+only the page origin/path, prompt presence/visibility/text length, message
+counts, the last assistant turn ID and text hash, generation/completion state,
+revision, and Artifact readiness, dimensions, source kind, and source hash. It
+never returns full HTML, prompt text, cookies, tokens, signed URLs, data URIs,
+or blob contents. It uses the same Browser Bootstrap and Session rebind path as
+other browser operations.
+The snapshot also lists recently retained Trace IDs so a client can locate the
+same request when its final chat response was lost.
+
+#### `debug_trace`
+
+Parameters are `provider`, optional `session_id`, and required `request_id`.
+The result reads the in-memory bounded trace for that chat request. Events are
+`before_send`, `submitted`, `assistant_node_seen`, `artifact_seen`,
+`artifact_ready`, `completion_candidate`, `completed`, or
+`chat_state_unknown`. Traces are not persisted and are cleared when the
+Extension is reloaded.
+
+#### `wait_artifact`
+
+Parameters are a required `artifact_id` and optional `timeout_ms` from 1000
+through 300000 (default 60000). It only waits for an existing Artifact
+descriptor to become ready and never resubmits the Prompt. A closed Session is
+temporarily restored and closed again afterward, preserving `active: false`.
+Timeout returns `ARTIFACT_NOT_READY`.
 
 ## Broker progress
 
@@ -218,8 +251,9 @@ The Broker sends:
 {"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"Hello"}}
 ```
 
-Supported internal methods are `open`, `chat`, `get_messages`, `close_tab`,
-`resolve_artifact`, and `get_artifact`. A response is
+Supported internal methods are `open`, `chat`, `get_messages`, `debug_snapshot`,
+`debug_trace`, `wait_artifact`, `close_tab`, `resolve_artifact`, and
+`get_artifact`. A response is
 either:
 
 ```json
@@ -268,7 +302,8 @@ Current Broker-facing error codes include:
 | Page operation | `PAGE_NOT_READY`, `INPUT_FAILED`, `BUSY`, `SEND_FAILED` |
 | Ambiguous chat | `CHAT_STATE_UNKNOWN` |
 | Time and size | `RPC_TIMEOUT`, `RESPONSE_TIMEOUT`, `RESPONSE_TOO_LARGE`, `ARTIFACT_TOO_LARGE` |
-| Artifact | `ARTIFACT_NOT_FOUND`, `ARTIFACT_UNAVAILABLE`, `ARTIFACT_TRANSFER_FAILED`, `ARTIFACT_INVALID_TYPE`, `ARTIFACT_SOURCE_EXPIRED`, `ARTIFACT_WRITE_FAILED` |
+| Artifact | `ARTIFACT_NOT_FOUND`, `ARTIFACT_NOT_READY`, `ARTIFACT_UNAVAILABLE`, `ARTIFACT_TRANSFER_FAILED`, `ARTIFACT_INVALID_TYPE`, `ARTIFACT_SOURCE_EXPIRED`, `ARTIFACT_WRITE_FAILED` |
+| Debugging | `DEBUG_TRACE_NOT_FOUND` |
 | Fallback | `INTERNAL_ERROR` |
 
 `PROMPT_NOT_FOUND` and `SEND_BUTTON_NOT_FOUND` are internal content-runtime

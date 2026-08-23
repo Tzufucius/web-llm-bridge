@@ -64,9 +64,10 @@ def _data_uri(source: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> tuple[str,
 
 
 class ArtifactMaterializer:
-    def __init__(self, *, max_bytes: int = MAX_ARTIFACT_BYTES, blob_fetcher: Callable[[ArtifactRecord], Awaitable[bytes | tuple[bytes, str | None]]] | None = None) -> None:
+    def __init__(self, *, max_bytes: int = MAX_ARTIFACT_BYTES, blob_fetcher: Callable[[ArtifactRecord], Awaitable[bytes | tuple[bytes, str | None]]] | None = None, https_fetcher: Callable[[ArtifactRecord], Awaitable[bytes | tuple[bytes, str | None]]] | None = None) -> None:
         self.max_bytes = max_bytes
         self.blob_fetcher = blob_fetcher
+        self.https_fetcher = https_fetcher
 
     async def materialize(self, record: ArtifactRecord, output: str | os.PathLike[str] | None = None) -> dict[str, Any]:
         target = Path(output) if output is not None else self._default_path(record)
@@ -86,7 +87,21 @@ class ArtifactMaterializer:
                     data = fetched
                 mime_type = _validate_bytes(data, record.mime_type or transfer_mime, max_bytes=self.max_bytes)
             elif source_kind == "https" or record.source.startswith("https:"):
-                mime_type, data = self._download_https(record.source, record.mime_type)
+                try:
+                    mime_type, data = self._download_https(record.source, record.mime_type)
+                except WebLLMBridgeError as exc:
+                    # Provider URLs may require the browser's authenticated
+                    # cookies even though they are HTTPS. Use the Extension
+                    # only as a bounded fallback; plain HTTPS remains stdlib.
+                    if exc.code != "ARTIFACT_TRANSFER_FAILED" or self.https_fetcher is None:
+                        raise
+                    fetched = await self.https_fetcher(record)
+                    transfer_mime: str | None = None
+                    if isinstance(fetched, tuple):
+                        data, transfer_mime = fetched
+                    else:
+                        data = fetched
+                    mime_type = _validate_bytes(data, record.mime_type or transfer_mime, max_bytes=self.max_bytes)
             else:
                 raise WebLLMBridgeError("Artifact 来源不可用", "ARTIFACT_UNAVAILABLE")
             if len(data) > self.max_bytes:
