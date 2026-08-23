@@ -14,12 +14,11 @@ class WebLLMSession:
     provider: str = "chatgpt"
     session_id: str | None = None
     conversation_url: str | None = None
-    reopen_on_closed: bool = False
 
     @classmethod
-    async def open(cls, *, provider: str = "chatgpt", new: bool = False, url: str | None = None, session_id: str | None = None, reopen_on_closed: bool | None = None) -> "WebLLMSession":
-        result = await rpc_call("open", {"provider": provider, "new": new, "url": url, "session_id": session_id, "reopen_on_closed": reopen_on_closed})
-        return cls(provider=result["provider"], session_id=result["session_id"], conversation_url=result.get("conversation_url"), reopen_on_closed=result.get("reopen_on_closed", False))
+    async def open(cls, *, provider: str = "chatgpt", new: bool = False, url: str | None = None, session_id: str | None = None) -> "WebLLMSession":
+        result = await rpc_call("open", {"provider": provider, "new": new, "url": url, "session_id": session_id})
+        return cls(provider=result["provider"], session_id=result["session_id"], conversation_url=result.get("conversation_url"))
 
     async def chat(self, text: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> str:
         result = await self.chat_result(text, progress=progress)
@@ -56,4 +55,3 @@ class WebLLMSession:
     def _update(self, result: dict[str, Any]) -> None:
         self.session_id = result.get("session_id", self.session_id)
         self.conversation_url = result.get("conversation_url", self.conversation_url)
-        self.reopen_on_closed = result.get("reopen_on_closed", self.reopen_on_closed)

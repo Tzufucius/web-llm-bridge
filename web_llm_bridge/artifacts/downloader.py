@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import mimetypes
 import os
 from pathlib import Path
 import tempfile
@@ -24,13 +23,6 @@ _MAGIC = {
     "image/gif": (b"GIF87a", b"GIF89a"),
     "image/webp": (b"RIFF",),
 }
-
-
-def _mime_from_path(path: Path, declared: str | None) -> str | None:
-    if declared in SUPPORTED_MIME_TYPES:
-        return declared
-    guessed, _ = mimetypes.guess_type(path.name)
-    return guessed if guessed in SUPPORTED_MIME_TYPES else None
 
 
 def _validate_bytes(data: bytes, mime_type: str | None, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> str:
