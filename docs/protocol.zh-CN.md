@@ -8,8 +8,8 @@ Web LLM Bridge 包含两段本地协议：
 - Extension 到 Broker：`ws://127.0.0.1:8765` 上的 WebSocket JSON 消息。
 
 两者都是仅限回环地址的 IPC，不是公开远程 API。当前 Extension 协议版本为 `2`，两段
-Transport 的消息大小上限都是 8 MiB。版本 2 增加 Session 生命周期 RPC 和有界 Artifact
-分块传输；旧版 Extension 会在握手阶段被拒绝。
+Transport 的消息大小上限都是 8 MiB。本次收敛保持协议版本 `2` 不变；旧版 Extension
+会在握手阶段被拒绝。
 
 ## Broker NDJSON
 
@@ -61,7 +61,6 @@ Broker NDJSON ID 在该本地 RPC 中保持不变。Broker 到 Extension 的 Tra
 | `new` | 布尔值；默认为 `false`。为 true 时不得同时提供 `url` 或 `session_id`。 |
 | `url` | 可选的 Provider HTTPS URL，与 `session_id` 互斥。 |
 | `session_id` | 可选的已有 Session ID。 |
-| `reopen_on_closed` | 可选布尔值。为 `null`/省略时保留已存策略，否则覆盖该策略。 |
 
 没有显式目标时，优先使用该 Provider 的 active 记录；没有 active 记录则打开 Provider
 默认 URL。`new: true` 会创建新标签页和新 Session 记录。其他 Open 可以重新附加已记录
@@ -73,10 +72,8 @@ Broker NDJSON ID 在该本地 RPC 中保持不变。Broker 到 Extension 的 Tra
 {
   "session_id": "3d1f...",
   "provider": "chatgpt",
-  "tab_id": 42,
   "conversation_url": "https://chatgpt.com/c/example",
-  "sequence": 0,
-  "reopen_on_closed": false
+  "sequence": 0
 }
 ```
 
@@ -87,10 +84,7 @@ Session 时，Manager 会在 Provider 默认 URL 创建 Session。结果是上�
 再加上非空字符串 `text`，其中包含最终序列化的 Assistant 回复。
 
 浏览器分派前 `sequence` 就会递增，即使操作随后失败也不回退。调用方不能把它作为提交
-成功的证据。
-
-成功的 Chat 结果还会包含 Extension request ID（`request_id`）。该 ID 只用于随后调用
-`debug_trace`，不代表 Prompt 已成功提交。
+成功的证据。Transport request ID 只存在于两段 IPC 内部，不会出现在业务结果中。
 
 #### `get_messages`
 
@@ -120,10 +114,8 @@ Session 时，Manager 会在 Provider 默认 URL 创建 Session。结果是上�
 
 #### `list_sessions`
 
-可选字符串 `provider` 用于过滤记录。结果为 `{"sessions":[...]}`。每条记录包含
-`version`、`provider`、`session_id`、`tab_id`、`current_url`、`created_at`、
-`updated_at`、`sequence`、`active` 和 `reopen_on_closed`。该方法返回 Store 记录，
-因此 URL 字段是 `current_url`，不是 `conversation_url`。
+可选字符串 `provider` 用于过滤记录。结果为 `{"sessions":[...]}`。每条公共记录只包含
+`provider`、`session_id`、`conversation_url` 和 `sequence`。
 
 #### `close_session`
 
@@ -144,27 +136,8 @@ Chat 与历史响应可以增加 `artifacts` 数组。图片 descriptor 包含 `
 `provider`、`turn_id`、`index`、`mime_type`、`width`、`height`、`alt`、`quality`；公共
 结果不会暴露 source URL 或 DOM selector。纯图片回复允许 `text: ""`。
 
-#### `debug_snapshot`
-
-读取绑定标签页的脱敏 DOM/Artifact 快照。该方法只返回页面 origin/path、Prompt 是否存在
-和文本长度、消息计数、最后 Assistant 的 turn/text hash、generating 状态、完成标记、
-revision 以及 Artifact 的就绪状态、尺寸、source 类型和 hash。不会返回完整 HTML、Prompt
-内容、Cookie、Token、signed URL、data URI 或 blob 内容。该方法需要浏览器 Extension
-连接，并可能触发同一套 Browser Bootstrap 和 Session rebind。
-快照还会列出最近保留的 Trace ID，便于 Chat 客户端在最终响应丢失时继续定位同一次请求。
-
-#### `debug_trace`
-
-参数为 `provider`、可选 `session_id` 和必填 `request_id`。返回该 Chat 请求在 Extension
-内存 ring buffer 中保留的事件：`before_send`、`submitted`、`assistant_node_seen`、
-`artifact_seen`、`artifact_ready`、`completion_candidate`、`completed` 或
-`chat_state_unknown`。Trace 不落盘，Extension 重载后会清空。
-
-#### `wait_artifact`
-
-参数为必填 `artifact_id` 和可选 `timeout_ms`（1000 到 300000，默认 60000）。它只等待
-已有 Artifact descriptor 变为 ready，不会重新提交 Prompt。关闭 Session 时会临时恢复标签页，
-完成后再次关闭，并保持 Session 的 `active=false`。超时返回 `ARTIFACT_NOT_READY`。
+`get_artifact` 在内部完成 `resolveArtifact(turn_id,index)`、就绪轮询、来源刷新和有界分块
+传输，使用固定等待上限且不公开 `timeout_ms`。它不接受任意 URL，也不会重新提交 Prompt。
 
 ## Broker progress
 
@@ -222,8 +195,8 @@ Broker 发送：
 {"type":"request","id":"transport-id","method":"chat","params":{"provider":"chatgpt","tab_id":42,"text":"你好"}}
 ```
 
-支持的内部方法为 `open`、`chat`、`get_messages`、`debug_snapshot`、`debug_trace`、
-`wait_artifact`、`close_tab`、`resolve_artifact` 和 `get_artifact`。响应为以下两种之一：
+支持的内部方法为 `open`、`close_tab`、`chat`、`get_messages` 和 `get_artifact`。Provider
+内部仍保留 `resolveArtifact(turn_id,index)`，但它不是 RPC 方法。响应为以下两种之一：
 
 ```json
 {"type":"response","id":"transport-id","ok":true,"result":{}}
@@ -265,8 +238,7 @@ Prompt。
 | 页面操作 | `PAGE_NOT_READY`、`INPUT_FAILED`、`BUSY`、`SEND_FAILED` |
 | Chat 歧义 | `CHAT_STATE_UNKNOWN` |
 | 时间与大小 | `RPC_TIMEOUT`、`RESPONSE_TIMEOUT`、`RESPONSE_TOO_LARGE`、`ARTIFACT_TOO_LARGE` |
-| Artifact | `ARTIFACT_NOT_FOUND`、`ARTIFACT_NOT_READY`、`ARTIFACT_UNAVAILABLE`、`ARTIFACT_TRANSFER_FAILED`、`ARTIFACT_INVALID_TYPE`、`ARTIFACT_SOURCE_EXPIRED`、`ARTIFACT_WRITE_FAILED` |
-| 调试 | `DEBUG_TRACE_NOT_FOUND` |
+| Artifact | `ARTIFACT_NOT_FOUND`、`ARTIFACT_NOT_READY`、`ARTIFACT_UNAVAILABLE`、`ARTIFACT_TRANSFER_FAILED`、`ARTIFACT_INVALID_TYPE`、`ARTIFACT_WRITE_FAILED` |
 | 兜底 | `INTERNAL_ERROR` |
 
 `PROMPT_NOT_FOUND` 和 `SEND_BUTTON_NOT_FOUND` 是 content runtime 内部诊断。目前会重试

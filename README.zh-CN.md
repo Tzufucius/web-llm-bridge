@@ -12,12 +12,16 @@ Web LLM Bridge 将已登录的大语言模型 Web 页面桥接为可由 Agent �
 
 传统 Shell Agent 擅长调用 CLI，但直接操作 LLM Web 页面很脆弱。没有 Bridge 时，Agent 需要自行理解不断变化的 DOM，定位编辑器和按钮，确认提交，等待 Thinking、Tool Call 和 Streaming，判断最终完成，提取 Markdown 或 LaTeX，并恢复标签页和 Conversation。
 
-Web LLM Bridge 将这些网页细节封装在简单的本地接口之后。Agent 只需要调用：
+Web LLM Bridge 将这些网页细节封装在七个正式的本地命令之后。Agent 只需要调用：
 
 ```text
 open
 chat
 get-messages
+list-sessions
+close-session
+forget-session
+get-artifact
 ```
 
 对话上下文继续由 Web 应用自身维护。Bridge 不需要 Provider API key，而是使用用户已认证的浏览器 Session；它不会绕过 Provider 的配额、访问控制或验证。

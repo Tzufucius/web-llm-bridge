@@ -99,6 +99,18 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.delete_session(value.session_id), 1)
             self.assertIsNone(store.get(value.id))
 
+    def test_stable_id_and_created_at_survive_source_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ArtifactStore(directory)
+            value = record("https://cdn.example/old", "https")
+            first = store.upsert(session_id=value.session_id, provider=value.provider, conversation_url=value.conversation_url, descriptor=value.descriptor, source_kind="https", source=value.source)
+            created_at = store.get(value.id).created_at
+            second = store.upsert(session_id=value.session_id, provider=value.provider, conversation_url=value.conversation_url, descriptor=value.descriptor, source_kind="https", source="https://cdn.example/refreshed")
+            self.assertEqual(first["id"], make_artifact_id("chatgpt", "turn-1", 0))
+            self.assertEqual(second["id"], first["id"])
+            self.assertEqual(store.get(value.id).created_at, created_at)
+            self.assertEqual(store.get(value.id).source, "https://cdn.example/refreshed")
+
     def test_store_rejects_path_like_artifact_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = ArtifactStore(directory)

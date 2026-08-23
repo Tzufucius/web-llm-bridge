@@ -53,9 +53,9 @@ not remotely exposed service APIs.
 ### Client and session handle
 
 `WebLLMClient` sends one Broker RPC per connection. `WebLLMSession` is a small,
-Broker-backed handle containing `provider`, `session_id`, `conversation_url`,
-and `reopen_on_closed`. It does not own a tab, a WebSocket, the Broker process,
-or credentials. Leaving its async context does not close any shared resource.
+Broker-backed handle containing `provider`, `session_id`, and
+`conversation_url`. It does not own a tab, a WebSocket, the Broker process, or
+credentials. Leaving its async context does not close any shared resource.
 
 `close_session` closes only the Tab bound to a persisted Session and keeps its
 Conversation URL and sequence. `forget_session` additionally removes local
@@ -94,12 +94,14 @@ a remote proxy.
 
 A session is a durable binding record, not a copy of a web conversation. The
 store persists schema version, provider ID, session ID, tab ID, current URL,
-creation/update timestamps, sequence, active status, and
-`reopen_on_closed`. Only one stored record per provider is active.
+creation/update timestamps, sequence, and active status. Legacy JSON is
+normalized to this reduced structure when read. Only one stored record per
+provider is active.
 
 `sequence` is incremented and persisted before each chat dispatch. It therefore
 counts chat attempts, including attempts that later fail; it is not proof that a
-message was accepted by the page.
+message was accepted by the page. Public results do not expose `tab_id`,
+`active`, transport `request_id`, or private Artifact sources.
 
 The store contains neither message bodies nor authentication material. Removing
 the local registry does not delete a conversation on the provider website.
@@ -200,10 +202,9 @@ The extension maps that ambiguity to `CHAT_STATE_UNKNOWN` with
 prompt automatically.
 
 If a closed tab is known before content dispatch, the extension can report
-`TAB_CLOSED` with `safe_to_retry: true`. With `reopen_on_closed` enabled,
-`get_messages` rebinds and retries once. For `chat`, the manager may rebind for a
-future operation but still raises the original failure and never replays the
-prompt.
+`TAB_CLOSED` with `safe_to_retry: true`. The manager rebinds stale tabs before
+the next operation. For `chat`, a failure after dispatch still raises the
+original ambiguity and never replays the prompt.
 
 All errors are failures, even when `safe_to_retry` is true. The flag only states
 whether repeating that same RPC is known not to duplicate a page-side effect at

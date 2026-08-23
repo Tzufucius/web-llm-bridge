@@ -12,12 +12,16 @@ It handles browser-specific interaction such as DOM parsing, prompt submission, 
 
 Traditional shell agents are good at calling CLI tools, but interacting directly with LLM web applications is fragile. Without a bridge, an agent would need to understand changing DOM structures, locate editors and buttons, confirm submission, wait through thinking, tool calls, and streaming, detect final completion, extract Markdown or LaTeX, and recover tabs and conversations.
 
-Web LLM Bridge moves that browser-specific complexity behind a small local interface. Agents only need to call:
+Web LLM Bridge moves that browser-specific complexity behind seven public local commands:
 
 ```text
 open
 chat
 get-messages
+list-sessions
+close-session
+forget-session
+get-artifact
 ```
 
 The web application keeps the conversation context. The bridge itself does not need a Provider API key because it uses the user's authenticated browser session; it does not bypass quotas, access controls, or verification.

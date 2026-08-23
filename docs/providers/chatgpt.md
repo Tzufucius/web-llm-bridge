@@ -64,14 +64,11 @@ seconds for the content script to answer `ping` before returning
 `PAGE_NOT_READY`.
 
 A persistent session record stores only the provider, session/tab IDs, current
-URL, timestamps, sequence, active flag, and recovery policy. After a successful
-chat or history read, the current tab URL is written back so navigation from the
-home page to `/c/...` can be recovered later.
-
-With `reopen_on_closed: true`, a read may reopen the recorded URL and retry once.
-A chat is never replayed. If a tab is known closed before dispatch, `TAB_CLOSED`
-may be safe to retry; if messaging fails after dispatch begins, the provider
-returns `CHAT_STATE_UNKNOWN` and retry is unsafe.
+URL, timestamps, sequence, and active flag. After a successful chat or history
+read, the current tab URL is written back so navigation from the home page to
+`/c/...` can be recovered later. Stale tabs are rebound before the next
+operation; a chat is never replayed. If messaging fails after dispatch begins,
+the provider returns `CHAT_STATE_UNKNOWN` and retry is unsafe.
 
 ## DOM profile
 
@@ -139,7 +136,7 @@ not required to exist and its presence alone is not sufficient. If no effective
 page activity occurs for five consecutive minutes, the runtime returns
 `RESPONSE_TIMEOUT`, never partial text as success.
 
-## Artifact extraction and debugging
+## Artifact extraction and materialization
 
 Images are extracted only from assistant turns. Avatars, favicons, icons, tool
 icons, decorative elements, loading placeholders, and user-uploaded images are
@@ -147,11 +144,11 @@ filtered. Sources are selected in this order: original/download resource,
 original link, largest `srcset`, `currentSrc`, `src`, `data:`, then `blob:`;
 quality is `unknown` when the original cannot be confirmed.
 
-`debug-snapshot` returns a sanitized page snapshot and `debug-trace` returns the
-in-memory event trace for one chat request. Neither exposes full DOM, prompt
-text, cookies, tokens, signed URLs, or image bytes. After generation, use
-`wait-artifact` until the descriptor is ready, then use `get-artifact` by ID;
-arbitrary URLs are never accepted.
+The adapter returns only the minimal descriptor plus private source fields. The
+Broker creates the stable Artifact ID from `(provider, turn_id, index)`. A
+`get-artifact` call resolves the turn/index again, polls readiness with a fixed
+internal bound, refreshes an expired source, and then materializes through the
+data/blob/HTTPS transfer path. Arbitrary URLs are never accepted.
 
 ## History behavior
 
@@ -232,8 +229,8 @@ date.
    restoration, and `truncated` behavior.
 7. Open the same conversation in another tab and verify normalized-URL reuse.
    Then use `new=true` and verify a distinct tab/session is created.
-8. Close a tab before `get_messages` with recovery disabled and enabled. Confirm
-   the enabled case rebinds and retries the read once.
+8. Close a tab before `get_messages` and confirm the manager rebinds the stale
+   tab before the read without exposing tab state in the result.
 9. During a chat, close the tab or reload/disable the extension. Confirm the
    prompt is not automatically replayed and ambiguous dispatch is reported as
    `CHAT_STATE_UNKNOWN` with `safe_to_retry: false`.

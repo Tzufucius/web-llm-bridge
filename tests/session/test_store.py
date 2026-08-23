@@ -33,6 +33,14 @@ class StoreTests(unittest.TestCase):
             record = SessionStore(directory).get("old")
             self.assertEqual(record["provider"], "chatgpt")
 
+    def test_legacy_reopen_policy_is_dropped_when_record_is_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "old.json")
+            path.write_text(json.dumps({"session_id": "old", "tab_id": 7, "current_url": "https://chatgpt.com/c/old", "reopen_on_closed": True}), encoding="utf-8")
+            record = SessionStore(directory).get("old")
+            self.assertNotIn("reopen_on_closed", record)
+            self.assertNotIn("reopen_on_closed", json.loads(path.read_text(encoding="utf-8")))
+
     def test_invalid_record_fields_do_not_block_other_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, "broken.json").write_text(
