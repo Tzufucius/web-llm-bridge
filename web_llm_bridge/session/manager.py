@@ -206,6 +206,7 @@ class SessionManager:
 
     async def _ensure(self, provider: str, session_id: str | None) -> dict[str, Any]:
         record = self.store.get(session_id, provider) if session_id else self.store.get(self._active.get(provider, ""), provider)
+        created = False
         if record is None:
             runtime = self.providers.get_provider(provider)
             result = await self._open_browser(runtime, runtime.default_url)
@@ -219,8 +220,9 @@ class SessionManager:
                 reopen_on_closed=False,
             )
             self._active[provider] = record["session_id"]
+            created = True
         assert record is not None
-        if record.get("current_url"):
+        if not created and record.get("current_url"):
             rebound = await self._open_browser(self.providers.get_provider(provider), record["current_url"], tab_id=record.get("tab_id"))
             if rebound.get("tab_id") != record.get("tab_id") or rebound.get("url"):
                 record = self.store.upsert(record, tab_id=rebound["tab_id"], current_url=rebound.get("url", record["current_url"]), active=True)
