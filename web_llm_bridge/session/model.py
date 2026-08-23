@@ -22,11 +22,15 @@ class WebLLMSession:
         return cls(provider=result["provider"], session_id=result["session_id"], conversation_url=result.get("conversation_url"), reopen_on_closed=result.get("reopen_on_closed", False))
 
     async def chat(self, text: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> str:
-        result = await rpc_call("chat", {"provider": self.provider, "session_id": self.session_id, "text": text}, progress=progress)
-        self._update(result)
+        result = await self.chat_result(text, progress=progress)
         return result["text"]
 
-    async def get_messages(self, *, limit: int | None = None, full: bool = False) -> list[dict[str, str]]:
+    async def chat_result(self, text: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+        result = await rpc_call("chat", {"provider": self.provider, "session_id": self.session_id, "text": text}, progress=progress)
+        self._update(result)
+        return result
+
+    async def get_messages(self, *, limit: int | None = None, full: bool = False) -> list[dict[str, Any]]:
         result = await rpc_call("get_messages", {"provider": self.provider, "session_id": self.session_id, "limit": limit, "full": full})
         self._update(result)
         return result["messages"]
@@ -39,8 +43,8 @@ class WebLLMSession:
     async def forget(self) -> dict[str, Any]:
         return await rpc_call("forget_session", {"provider": self.provider, "session_id": self.session_id})
 
-    async def get_artifact(self, artifact_id: str) -> dict[str, Any]:
-        return await rpc_call("get_artifact", {"artifact_id": artifact_id})
+    async def get_artifact(self, artifact_id: str, *, output: str | None = None) -> dict[str, Any]:
+        return await rpc_call("get_artifact", {"artifact_id": artifact_id, "output": output})
 
     async def __aenter__(self) -> "WebLLMSession":
         return self

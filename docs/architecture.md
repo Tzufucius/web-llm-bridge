@@ -57,8 +57,18 @@ Broker-backed handle containing `provider`, `session_id`, `conversation_url`,
 and `reopen_on_closed`. It does not own a tab, a WebSocket, the Broker process,
 or credentials. Leaving its async context does not close any shared resource.
 
-There is no public `close` RPC in the current protocol. `SessionManager.close()`
-exists only to shut down the Broker-owned transport during Broker teardown.
+`close_session` closes only the Tab bound to a persisted Session and keeps its
+Conversation URL and sequence. `forget_session` additionally removes local
+metadata; neither operation deletes a cloud Conversation. `SessionManager.close()`
+still exists only to shut down the Broker-owned transport during Broker teardown.
+
+Browser bootstrap is deliberately below the CLI. Before a browser RPC the
+manager starts the Extension listener, waits through a short reconnect grace,
+and, under one async launch lock, opens the configured daily browser only when
+the Extension has not completed its WebSocket handshake. Browser process
+presence is never used as a readiness signal. A Session is rebound by its
+Conversation URL before a new prompt is dispatched, while post-dispatch errors
+remain at-most-once and are never replayed automatically.
 
 ### Broker and SessionManager
 
@@ -132,6 +142,16 @@ The extension provider supplies site-specific metadata and behavior:
 
 The extension never needs passwords, cookies, tokens, private conversation
 APIs, DevTools/CDP, or clipboard access.
+
+### Artifact layer
+
+Provider adapters expose image Artifacts as stable descriptors. The Broker
+stores private source metadata locally and returns only provider-neutral fields
+such as `id`, `kind`, `turn_id`, dimensions, MIME type, and quality. Bytes are
+materialized only by `get-artifact`: public HTTPS sources use stdlib download,
+`data:` sources are decoded locally, and `blob:` sources are transferred from
+the content script in bounded 256 KiB chunks. Transfers are size- and MIME-
+checked, hashed with SHA-256, and atomically renamed into the Artifact store.
 
 ## Dependency direction
 

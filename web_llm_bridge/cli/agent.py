@@ -47,6 +47,10 @@ def _parser() -> argparse.ArgumentParser:
     forgotten.add_argument("--session-id", required=True, help="Target session ID.")
     forgotten.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
     forgotten.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
+    artifact = commands.add_parser("get-artifact", help="Materialize a previously discovered Artifact.")
+    artifact.add_argument("--id", required=True, dest="artifact_id", help="Artifact ID.")
+    artifact.add_argument("--output", help="Optional output file; defaults to the Artifact store.")
+    artifact.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     return parser
 
 
@@ -64,6 +68,8 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
         return await rpc_call("close_session", {"provider": args.provider, "session_id": args.session_id})
     if args.command == "forget-session":
         return await rpc_call("forget_session", {"provider": args.provider, "session_id": args.session_id})
+    if args.command == "get-artifact":
+        return await rpc_call("get_artifact", {"artifact_id": args.artifact_id, "output": args.output})
     return await rpc_call("list_sessions", {"provider": args.provider})
 
 

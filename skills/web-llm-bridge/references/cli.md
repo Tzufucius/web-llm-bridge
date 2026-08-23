@@ -72,6 +72,27 @@ web-llm-agent list-sessions --provider chatgpt --json
 Use this when the active Session is unclear or a persisted `session_id` must
 be selected. It returns Session metadata, not the full Conversation body.
 
+### `close-session` and `forget-session`
+
+```bash
+web-llm-agent close-session --session-id SESSION_ID --json
+web-llm-agent forget-session --session-id SESSION_ID --json
+```
+
+`close-session` closes only the Session-bound browser Tab and keeps the
+Conversation URL for later `open --session-id`. `forget-session` also removes
+local Session metadata. Neither command deletes the cloud Conversation.
+
+### `get-artifact`
+
+```bash
+web-llm-agent get-artifact --id ARTIFACT_ID --json
+web-llm-agent get-artifact --id ARTIFACT_ID --output ./image.png --json
+```
+
+Only an Artifact ID is accepted; arbitrary URLs are not. The result contains an
+absolute local path, MIME type, size, SHA-256, and quality.
+
 ## JSON and exit codes
 
 With `--json`, stdout contains exactly one complete JSON object. Parse stdout
@@ -80,7 +101,7 @@ with `json.loads`; never parse stderr for business success.
 Success exits `0`:
 
 ```json
-{"ok":true,"result":{"text":"..."}}
+{"ok":true,"result":{"text":"...","artifacts":[]}}
 ```
 
 Broker or business failures exit `1`:

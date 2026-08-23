@@ -49,7 +49,10 @@ class BrokerServer:
                 artifact_id = params.get("artifact_id")
                 if not isinstance(artifact_id, str) or not artifact_id:
                     raise WebLLMBridgeError("artifact_id 参数为必填字符串", "INVALID_ARGUMENT")
-                result = await self.manager.get_artifact(artifact_id)
+                output = params.get("output")
+                if output is not None and not isinstance(output, str):
+                    raise WebLLMBridgeError("output 参数必须是字符串", "INVALID_ARGUMENT")
+                result = await self.manager.get_artifact(artifact_id, output=output)
             elif method == "list_sessions":
                 listed_provider = params.get("provider")
                 if listed_provider is not None and not isinstance(listed_provider, str):
